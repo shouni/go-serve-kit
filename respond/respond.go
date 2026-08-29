@@ -14,6 +14,7 @@
 package respond
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"log/slog"
@@ -38,12 +39,25 @@ type errorBody struct {
 	Error string `json:"error"`
 }
 
+// encodeFailureBody は、エンコードに失敗したときに返す本文です。
+//
+// errorBody を通さずに用意してあるのは、エンコードが失敗した直後に同じ
+// エンコード経路をもう一度通らせないためです。
+var encodeFailureBody = []byte(`{"error":"Internal Server Error"}` + "\n")
+
 // JSON は payload を JSON として書き出します。
 //
-// エンコードに失敗しても応答は差し替えられません。ヘッダーと状態コードを
-// 送った後だからです。記録だけ残して返ります。出力先が slog.Default() なのは、
-// 既定ロガーを差し替えてあるアプリで、severity やトレース相関がそのまま
-// 効くためです。
+// 先にバッファへ組み立ててから送ります。途中で失敗しうる値（chan、循環参照、
+// エラーを返す MarshalJSON）を w へ直接流すと、書けたところまでの壊れた JSON が
+// 状態コード 200 のまま届き、呼び出し側からは「成功したが本文が壊れている」
+// という最も紛らわしい形になります。組み立ててから送れば 500 に振り替えられます。
+//
+// 失敗時の本文も JSON です。JSON を返す約束のルートで失敗時だけ text/plain に
+// なると、呼び出し側は成功と失敗で本文の読み方を変えることになります
+// （ErrorJSON と同じ理由です）。
+//
+// 記録先が slog.Default() なのは、既定ロガーを差し替えてあるアプリで、
+// severity やトレース相関がそのまま効くためです。
 //
 // Vary: Accept は立てません。表現を出し分けるかどうかを知っているのは
 // WantsJSON を呼んだ側で、JSON しか返さない経路に Vary は要らないためです。
@@ -52,11 +66,21 @@ func JSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 		return
 	}
 
+	var buf bytes.Buffer
+	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
+		slog.ErrorContext(requestContext(r), "respond: JSON 応答のエンコードに失敗しました",
+			"error", err, "status", status)
+		w.Header().Set("Content-Type", contentTypeJSON)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write(encodeFailureBody)
+		return
+	}
+
 	w.Header().Set("Content-Type", contentTypeJSON)
 	w.WriteHeader(status)
 
-	if err := json.NewEncoder(w).Encode(payload); err != nil {
-		slog.ErrorContext(requestContext(r), "respond: JSON 応答のエンコードに失敗しました",
+	if _, err := w.Write(buf.Bytes()); err != nil {
+		slog.ErrorContext(requestContext(r), "respond: JSON 応答の書き出しに失敗しました",
 			"error", err, "status", status)
 	}
 }

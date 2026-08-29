@@ -3,6 +3,7 @@ package respond_test
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -53,8 +54,15 @@ func TestJSONLogsEncodeFailure(t *testing.T) {
 
 		respond.JSON(rec, req, http.StatusOK, make(chan int))
 
-		if rec.Code != http.StatusOK {
-			t.Errorf("status = %d, want 200（ヘッダーは送信済みで変えられない）", rec.Code)
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("status = %d, want 500（壊れた本文を送らず失敗へ振り替える）", rec.Code)
+		}
+		if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
+			t.Errorf("Content-Type = %q（失敗時も JSON のまま返す）", got)
+		}
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+			t.Errorf("失敗時の本文が JSON として読めません: %q", rec.Body.String())
 		}
 		if !strings.Contains(buf.String(), "エンコードに失敗") {
 			t.Errorf("エンコード失敗が記録されていません (req=%v): %s", req != nil, buf.String())
@@ -220,5 +228,63 @@ func TestErrorAndErrorJSONAgreeForJSONCallers(t *testing.T) {
 	}
 	if always.Header().Get("Vary") != "" {
 		t.Error("ErrorJSON が Vary を立てています")
+	}
+}
+
+// TestJSONDoesNotLeakPartialBody は、エンコードが途中で失敗する値を渡しても、
+// 書きかけの本文が送られないことを検証します。バッファへ組み立ててから送る
+// 理由がこれで、直接流すと {"ok":"..." までが 200 で届きます。
+func TestJSONDoesNotLeakPartialBody(t *testing.T) {
+	payload := struct {
+		OK  string   `json:"ok"`
+		Bad chan int `json:"bad"` // ここでエンコードが失敗する
+	}{OK: "この値は届いてはいけません"}
+
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+
+	rec := httptest.NewRecorder()
+	respond.JSON(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK, payload)
+
+	if strings.Contains(rec.Body.String(), "届いてはいけません") {
+		t.Errorf("書きかけの本文が送られています: %q", rec.Body.String())
+	}
+	if rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500", rec.Code)
+	}
+}
+
+// failingWriter は Write が必ず失敗する ResponseWriter です。
+// 接続が切れた後の書き出しを模します。
+type failingWriter struct {
+	header http.Header
+	code   int
+}
+
+func (f *failingWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = http.Header{}
+	}
+	return f.header
+}
+
+func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("connection reset") }
+func (f *failingWriter) WriteHeader(code int)      { f.code = code }
+
+// TestJSONLogsWriteFailure は、組み立てには成功したが送信に失敗した場合
+// （相手が切断した等）に記録が残ることを検証します。ここで黙って返ると、
+// 応答が届いていない事実がどこにも残りません。
+func TestJSONLogsWriteFailure(t *testing.T) {
+	var logs bytes.Buffer
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+
+	w := &failingWriter{}
+	respond.JSON(w, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK, map[string]string{"ok": "yes"})
+
+	if w.code != http.StatusOK {
+		t.Errorf("status = %d, want 200（組み立ては成功している）", w.code)
+	}
+	if !strings.Contains(logs.String(), "書き出しに失敗") {
+		t.Errorf("書き出し失敗が記録されていません: %s", logs.String())
 	}
 }

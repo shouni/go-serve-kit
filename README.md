@@ -29,6 +29,9 @@
     共有するなら `Error`（相手が JSON を求めていれば `{"error": ...}`、そうでなければ `text/plain`）。
     **JSON しか返さないルートは `ErrorJSON`** です — 成功時が無条件 JSON なのにエラーだけ `Accept` で
     形が変わると、呼び出し側は成功と失敗で本文の読み方を変えることになります。
+  * `JSON` は**バッファへ組み立ててから送ります**。途中で失敗しうる値（`chan`、循環参照、
+    エラーを返す `MarshalJSON`）を直接流すと、書けたところまでの壊れた JSON が 200 のまま
+    届くためです。失敗した場合は 500 と `{"error": ...}` を返します。
 * **`secureheaders`**: CSP・HSTS・`nosniff`・`Referrer-Policy`・`Permissions-Policy` を全応答へ付与
   * CSP は開けたいディレクティブだけを `Config` で渡せば、残りはキットが組み立てます
     （`ImageSources` / `MediaSources` / `ScriptSources` / `StyleSources` / `ConnectSources`）。
