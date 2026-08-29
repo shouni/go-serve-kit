@@ -29,17 +29,26 @@
     共有するなら `Error`（相手が JSON を求めていれば `{"error": ...}`、そうでなければ `text/plain`）。
     **JSON しか返さないルートは `ErrorJSON`** です — 成功時が無条件 JSON なのにエラーだけ `Accept` で
     形が変わると、呼び出し側は成功と失敗で本文の読み方を変えることになります。
+  * `JSON` は**バッファへ組み立ててから送ります**。途中で失敗しうる値（`chan`、循環参照、
+    エラーを返す `MarshalJSON`）を直接流すと、書けたところまでの壊れた JSON が 200 のまま
+    届くためです。失敗した場合は 500 と `{"error": ...}` を返します。
 * **`secureheaders`**: CSP・HSTS・`nosniff`・`Referrer-Policy`・`Permissions-Policy` を全応答へ付与
-  * CSP は `ImageSources` / `MediaSources` だけ渡せば、残りの 9 ディレクティブはキットが組み立てます。
-    CSP 全体を文字列で受け渡す形にしないのは、`object-src 'none'` や `'self'` が
-    1 アプリずつ静かに抜け落ちるためです。
+  * CSP は開けたいディレクティブだけを `Config` で渡せば、残りはキットが組み立てます
+    （`ImageSources` / `MediaSources` / `ScriptSources` / `StyleSources` / `ConnectSources`）。
+    CSP 全体を文字列で受け渡す形を既定にしないのは、`object-src 'none'` や `'self'` が
+    1 アプリずつ静かに抜け落ちるためです。`ContentSecurityPolicy` は最後の手段で、
+    渡した時点で `base-uri` などの責任も呼び出し側に移ります。
+  * **`object-src` / `base-uri` / `frame-ancestors` / `form-action` に調整点はありません。**
+    緩める理由が無く、緩んだ状態で気付かれないほうが高くつくためです。
   * **既定は「外部オリジンを 1 つも許可しない」** で、第三者製の JS/CSS を CDN からではなく
     自前配信している前提です。CDN を `script-src` の allowlist に載せない理由は、jsDelivr のような
     ホストが npm の全パッケージを配信しており、「任意の npm パッケージの読み込みを許可する」に
     等しくなるためです。
-  * **`style-src` には既定で `'unsafe-inline'` が入ります。** Bootstrap の JS（collapse / tab）が
-    遷移中にインラインスタイルを当てるためです。インラインスタイルを一切使わない構成では、
-    `Config.ContentSecurityPolicy` で CSP 全体を差し替えて締めてください。
+  * **`'unsafe-inline'` は既定で付きません。** インラインスタイルを当てる JS を積んでいる場合
+    （Bootstrap の collapse / tab が該当します）だけ `AllowInlineStyle: true` を渡してください。
+    既定を厳格にしてあるので、**どのアプリがこれを必要としているかが設定に現れます**。
+    `script-src` に対応する項目は用意していません。インラインスクリプトを許すと、
+    CSP が防いでいるものの大半が無くなるためです。
   * HSTS は既定 1 年で、`preload` は付けません（撤回にブラウザベンダーへの申請が要るため）。
     負値を渡すと付与しません。
 * **`serverrole`**: `web` / `worker` / `both` の語彙と `Parse`
@@ -90,7 +99,8 @@ type Config struct {
 
 ```go
 handler := secureheaders.Middleware(secureheaders.Config{
-    MediaSources: []string{"https://storage.googleapis.com"}, // 署名付き URL へ 302 する場合
+    MediaSources:     []string{"https://storage.googleapis.com"}, // 署名付き URL へ 302 する場合
+    AllowInlineStyle: true,                                       // Bootstrap の collapse / tab を使う場合
 })(mux)
 
 srv := &http.Server{
@@ -159,6 +169,20 @@ go-serve-kit/
 ## 🤝 依存関係 (Dependencies)
 
 **ありません。** `go.mod` の `require` は空で、3 パッケージともテストを含めて標準ライブラリだけで動きます。
+
+---
+
+## 🧪 開発 (Development)
+
+```bash
+go test -race ./...      # CI が回すもの
+golangci-lint run ./...  # 設定は .golangci.yml
+go run golang.org/x/exp/cmd/gorelease@latest   # 直前のタグとの非互換と、次に名乗るべき版
+```
+
+`gorelease` は**タグを打つ前**に走らせます。直前のタグとの非互換な変更と、次に名乗るべき版を
+報告します。CI ジョブにしていないのは、この出力が意味を持つのは版を決める瞬間だけで、
+それ以外の push で走らせても誰も読まないためです。
 
 ---
 
