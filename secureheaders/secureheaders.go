@@ -1,10 +1,9 @@
 // Package secureheaders は、ブラウザ向けの防御的なレスポンスヘッダーを
 // 全応答へ付けるミドルウェアを提供します。
 //
-// 既定は「外部オリジンを 1 つも許可しない」で、第三者製の JS/CSS を CDN からでは
-// なく自前配信していること（assets/static/vendor）を前提にしています。CDN から
-// 読む構成では、Config で足すのではなく CSP 全体の差し替えが要ります
-// （Config.ContentSecurityPolicy）。
+// 既定は「外部オリジンを 1 つも許可せず、インラインスタイルも許さない」です。
+// 第三者製の JS/CSS を CDN からではなく自前配信していること（assets/static/vendor）
+// を前提にしており、足りない分は Config の *Sources と AllowInlineStyle で開けます。
 //
 //	r.Use(secureheaders.Middleware(secureheaders.Config{
 //	    MediaSources: []string{"https://storage.googleapis.com"},
@@ -47,8 +46,33 @@ type Config struct {
 	ImageSources []string
 	MediaSources []string
 
+	// ScriptSources / StyleSources / ConnectSources は、それぞれ script-src /
+	// style-src / connect-src に足す外部オリジンです。
+	//
+	// CDN を script-src に載せるのは避けてください。jsDelivr のようなホストは
+	// npm の全パッケージを配信しているため、「任意の npm パッケージの読み込みを
+	// 許可する」に等しくなります（既知の CSP バイパス・ガジェットを持ち込めます）。
+	ScriptSources  []string
+	StyleSources   []string
+	ConnectSources []string
+
+	// AllowInlineStyle は style-src に 'unsafe-inline' を足します。
+	//
+	// 既定は false（付けない）です。インラインスタイルを当てる JS を積んでいる
+	// 場合にだけ true にしてください（Bootstrap の collapse / tab が該当します）。
+	// 既定を false にしてあるのは、必要としないアプリまで巻き込まないためで、
+	// どのアプリがこれを要求しているかが設定に現れます。
+	//
+	// script-src に対応する項目は用意していません。インラインスクリプトを
+	// 許すと CSP が防いでいるものの大半が無くなるためです。
+	AllowInlineStyle bool
+
 	// ContentSecurityPolicy は、組み立てを使わず CSP 全体を指定します。
-	// 空なら ImageSources / MediaSources から組み立てます。
+	// 空なら他の項目から組み立てます。
+	//
+	// 最後の手段です。これを渡すと object-src 'none' や base-uri 'none' まで
+	// 呼び出し側の責任になります。1 つのディレクティブを緩めたいだけなら、
+	// 上の *Sources を使ってください。
 	ContentSecurityPolicy string
 
 	// ReferrerPolicy / PermissionsPolicy は空なら既定値です。
@@ -97,27 +121,30 @@ func (c Config) headers() map[string]string {
 
 // contentSecurityPolicy は CSP を組み立てます。
 //
-// 外部オリジンを許可するのは img-src と media-src だけです。CDN を script-src の
-// allowlist に載せる形にしないのは、jsDelivr のようなホストが npm の全パッケージを
-// 配信しており、「任意の npm パッケージの読み込みを許可する」に等しくなるためです
-// （既知の CSP バイパス・ガジェットを持ち込まれます）。
-//
-// script-src を 'self' だけにできるのは、インラインスクリプトを 1 つも置かない
-// 前提だからです。style-src にだけ 'unsafe-inline' が要ります。Bootstrap の JS
-// （collapse / tab）が遷移中にインラインスタイルを当てるためです。
+// 既定はどのディレクティブも 'self' だけで、外部オリジンは Config で足した分しか
+// 入りません。object-src / base-uri / frame-ancestors / form-action は調整点を
+// 用意していません。緩める理由が無く、緩めた状態で気付かれないほうが高くつきます。
 func (c Config) contentSecurityPolicy() string {
 	if csp := strings.TrimSpace(c.ContentSecurityPolicy); csp != "" {
 		return csp
 	}
 
+	// 'unsafe-inline' は 'self' の直後に置きます（順序に意味はありませんが、
+	// 緩めている事実がディレクティブの先頭で読めるようにするためです）。
+	style := []string{"'self'"}
+	if c.AllowInlineStyle {
+		style = append(style, "'unsafe-inline'")
+	}
+	style = append(style, c.StyleSources...)
+
 	return strings.Join([]string{
 		"default-src 'self'",
-		"script-src 'self'",
-		"style-src 'self' 'unsafe-inline'",
+		sourceList("script-src", append([]string{"'self'"}, c.ScriptSources...)),
+		sourceList("style-src", style),
 		sourceList("img-src", append([]string{"'self'", "data:"}, c.ImageSources...)),
 		sourceList("media-src", append([]string{"'self'"}, c.MediaSources...)),
 		"font-src 'self'",
-		"connect-src 'self'",
+		sourceList("connect-src", append([]string{"'self'"}, c.ConnectSources...)),
 		"object-src 'none'",
 		"base-uri 'none'",
 		"frame-ancestors 'none'",

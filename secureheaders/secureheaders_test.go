@@ -38,7 +38,7 @@ func TestDefaults(t *testing.T) {
 		"Permissions-Policy":        "geolocation=(), camera=(), microphone=(), payment=(), usb=()",
 		"Strict-Transport-Security": "max-age=31536000; includeSubDomains",
 		"Content-Security-Policy": "default-src 'self'; script-src 'self'; " +
-			"style-src 'self' 'unsafe-inline'; img-src 'self' data:; media-src 'self'; " +
+			"style-src 'self'; img-src 'self' data:; media-src 'self'; " +
 			"font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'none'; " +
 			"frame-ancestors 'none'; form-action 'self'",
 	}
@@ -101,7 +101,7 @@ func TestMatchesCurrentAppPolicies(t *testing.T) {
 				}
 			}
 			// 外部オリジンを許すのは img-src / media-src だけ。
-			for _, directive := range []string{"script-src 'self';", "style-src 'self' 'unsafe-inline';"} {
+			for _, directive := range []string{"script-src 'self';", "style-src 'self';"} {
 				if !strings.Contains(csp, directive) {
 					t.Errorf("CSP に %q が含まれていません:\n %s", directive, csp)
 				}
@@ -190,5 +190,67 @@ func TestConfigIsNotMutated(t *testing.T) {
 	}
 	if sources[0] != "https://a.example.com" || len(sources) != 1 {
 		t.Errorf("呼び出し側のスライスが書き換えられています: %v", sources)
+	}
+}
+
+// TestInlineStyleIsOptIn は、'unsafe-inline' が既定で付かず、明示したときだけ
+// style-src に入ることを検証します。既定を厳格にしてある理由そのものなので、
+// 取り違えるとどのアプリも黙って緩みます。
+func TestInlineStyleIsOptIn(t *testing.T) {
+	strict := serve(t, secureheaders.Config{}).Get("Content-Security-Policy")
+	if strings.Contains(strict, "'unsafe-inline'") {
+		t.Errorf("既定で 'unsafe-inline' が入っています:\n %s", strict)
+	}
+
+	relaxed := serve(t, secureheaders.Config{AllowInlineStyle: true}).Get("Content-Security-Policy")
+	if !strings.Contains(relaxed, "style-src 'self' 'unsafe-inline';") {
+		t.Errorf("AllowInlineStyle が効いていません:\n %s", relaxed)
+	}
+	// 緩めるのは style-src だけで、script-src は巻き込まない。
+	if !strings.Contains(relaxed, "script-src 'self';") {
+		t.Errorf("script-src まで緩んでいます:\n %s", relaxed)
+	}
+}
+
+// TestSourcesGoToTheirOwnDirective は、足したオリジンが指定したディレクティブに
+// だけ入ることを検証します。取り違えると、画像を許したつもりでスクリプトの
+// 読み込み元が開きます。
+func TestSourcesGoToTheirOwnDirective(t *testing.T) {
+	csp := serve(t, secureheaders.Config{
+		ScriptSources:    []string{"https://script.example.com"},
+		StyleSources:     []string{"https://style.example.com"},
+		ConnectSources:   []string{"https://api.example.com"},
+		AllowInlineStyle: true,
+	}).Get("Content-Security-Policy")
+
+	for _, want := range []string{
+		"script-src 'self' https://script.example.com;",
+		"style-src 'self' 'unsafe-inline' https://style.example.com;",
+		"connect-src 'self' https://api.example.com;",
+		// 足していないディレクティブは 'self' のまま。
+		"img-src 'self' data:;",
+		"media-src 'self';",
+		"font-src 'self';",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP に %q が含まれていません:\n %s", want, csp)
+		}
+	}
+}
+
+// TestHardenedDirectivesHaveNoKnob は、緩める手段を用意していないディレクティブが
+// 常に付くことを検証します。CSP 全体を差し替えたときだけ呼び出し側の責任になります。
+func TestHardenedDirectivesHaveNoKnob(t *testing.T) {
+	csp := serve(t, secureheaders.Config{
+		ScriptSources: []string{"https://script.example.com"},
+		ImageSources:  []string{"https://img.example.com"},
+	}).Get("Content-Security-Policy")
+
+	for _, want := range []string{
+		"object-src 'none'", "base-uri 'none'", "frame-ancestors 'none'", "form-action 'self'",
+	} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("CSP に %q が含まれていません:\n %s", want, csp)
+		}
 	}
 }
