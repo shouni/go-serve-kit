@@ -10,7 +10,7 @@
 
 ## 🚀 概要 (About) - 何を返すかだけを持ち、サーバーそのものは持たない
 
-**Go Serve Kit** は、HTTP サービスが応答を返す側で毎回書く定型（防御的ヘッダー・表現の出し分け・役割の宣言）を引き受けるツールキットです。
+**Go Serve Kit** は、HTTP サービスが応答を返す側で毎回書く定型（防御的ヘッダー・表現の出し分け・役割の宣言・静的ファイルの配信）を引き受けるツールキットです。
 
 ---
 
@@ -51,6 +51,15 @@
     CSP が防いでいるものの大半が無くなるためです。
   * HSTS は既定 1 年で、`preload` は付けません（撤回にブラウザベンダーへの申請が要るため）。
     負値を渡すと付与しません。
+* **`staticfiles`**: 埋め込んだ CSS / JS の配信と、パスで決まる `Cache-Control`
+  * **自前のファイルは 5 分、`vendor/` 配下は 1 年の `immutable`** です。`//go:embed` した FileServer は
+    `Last-Modified` も `ETag` も出せないので、期限が切れると必ず全体を取り直します。バージョンが
+    パスに入る vendor を分けているのは、その再取得を無くすためです。
+  * **404 には `Cache-Control` を付けません。** 無い vendor パスに 1 年の `immutable` が付くと、
+    後から置いたファイルがその期間ブラウザに届きません。
+  * **ディレクトリは一覧を出さず 404 です。** `http.FileServer` は既定で `/static/` の一覧を返します。
+  * **`Dir` の実在は `New` が確かめます。** `fs.Sub` は無いディレクトリでもエラーを返さないので、
+    埋め込み先の名前を変えただけの取り違えが、起動時ではなく全 404 として現れます。
 * **`serverrole`**: `web` / `worker` / `both` の語彙と `Parse`
   * **未設定と未知の値はエラーです。** 未設定を `both` に倒すと、環境変数が 1 つ欠けただけで
     公開している Web 面に Worker のルートが復活します。未知の値を黙って受け入れると、今度は
@@ -151,6 +160,18 @@ func createComic(w http.ResponseWriter, r *http.Request) {
 `Accept` による出し分けは「1 つのリソースに 2 つの表現がある」場合のためのもので、
 `JSON` / `ErrorJSON` は表現が 1 つしかないルートで使います。
 
+### 4. 静的ファイルを配信する
+
+認証の外側に置きます。スタイルシートにログインを求める理由は無く、ログイン画面からも参照されます。
+
+```go
+files, err := staticfiles.New(staticfiles.Config{FS: assets.StaticFiles, Dir: "static"})
+if err != nil {
+    return err // Dir の取り違えはここで止まります
+}
+mux.Handle("/static/", files) // chi なら r.Handle("/static/*", files)
+```
+
 より詳しい例は [pkg.go.dev の Example](https://pkg.go.dev/github.com/shouni/go-serve-kit) を参照してください。
 
 ---
@@ -161,14 +182,15 @@ func createComic(w http.ResponseWriter, r *http.Request) {
 go-serve-kit/
 ├── respond/        # 応答の書き出し（JSON / Error）と、Accept による表現の選択・Vary: Accept
 ├── secureheaders/  # ブラウザ向けの防御的レスポンスヘッダーと CSP の組み立て
-└── serverrole/     # web / worker / both の語彙と Parse
+├── serverrole/     # web / worker / both の語彙と Parse
+└── staticfiles/    # 埋め込んだ静的ファイルの配信と、パスで決まる Cache-Control
 ```
 
 ---
 
 ## 🤝 依存関係 (Dependencies)
 
-**ありません。** `go.mod` の `require` は空で、3 パッケージともテストを含めて標準ライブラリだけで動きます。
+**ありません。** `go.mod` の `require` は空で、4 パッケージともテストを含めて標準ライブラリだけで動きます。
 
 ---
 

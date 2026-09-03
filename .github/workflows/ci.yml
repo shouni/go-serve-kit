@@ -16,6 +16,7 @@ permissions:
 
 jobs:
   ci:
-    # fuzz-targets は空。このモジュールに外から与えられた値を解釈する経路は無い
-    # （Accept の判定は含む文字列を見るだけ、CSP と Role は設定値の組み立て）。
+    # fuzz-targets は空。このモジュールに外から与えられた値を自前で解釈する経路は無い
+    # （Accept の判定は含む文字列を見るだけ、CSP と Role は設定値の組み立て、
+    # staticfiles のパス解決は net/http に委ねている）。
     uses: shouni/workflows/.github/workflows/go-ci.yml@v1
