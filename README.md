@@ -176,7 +176,7 @@ mux.Handle("/static/", files) // chi なら r.Handle("/static/*", files)
 
 ---
 
-## 🏗 プロジェクトレイアウト (Project Layout)
+## 📦 パッケージ構成 (Package Structure)
 
 ```text
 go-serve-kit/
