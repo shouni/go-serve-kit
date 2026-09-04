@@ -194,20 +194,6 @@ go-serve-kit/
 
 ---
 
-## 🧪 開発 (Development)
-
-```bash
-go test -race ./...      # CI が回すもの
-golangci-lint run ./...  # 設定は .golangci.yml
-go run golang.org/x/exp/cmd/gorelease@latest   # 直前のタグとの非互換と、次に名乗るべき版
-```
-
-`gorelease` は**タグを打つ前**に走らせます。直前のタグとの非互換な変更と、次に名乗るべき版を
-報告します。CI ジョブにしていないのは、この出力が意味を持つのは版を決める瞬間だけで、
-それ以外の push で走らせても誰も読まないためです。
-
----
-
 ## 📜 ライセンス (License)
 
 このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。
