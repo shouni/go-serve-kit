@@ -64,6 +64,9 @@ Each package is imported on its own; nothing here imports anything else here.
 - **`JSON` marshals into a buffer before writing.** Streaming a value that can fail mid-encode (`chan`,
   a cycle, a failing `MarshalJSON`) delivers truncated JSON under a 200 that is already committed. On
   failure it answers 500 with `{"error": ...}`.
+- **`JSON` writes no body for 1xx / 204 / 304.** `net/http` rejects a `Write` on those statuses, so
+  without the guard every `respond.JSON(w, r, 204, nil)` logged a spurious write failure that buried
+  the real ones. The payload is discarded, mirroring `bodyAllowedForStatus`.
 
 ### `secureheaders`
 
@@ -76,6 +79,10 @@ Each package is imported on its own; nothing here imports anything else here.
 - **`AllowInlineStyle` exists; a `script-src` counterpart does not, and must not be added.** Allowing
   inline script removes most of what CSP is for. Keeping inline style opt-in also means the config shows
   which app needs it (Bootstrap's collapse/tab).
+- **`*Sources` reject CSP keywords (`'...'`) and any-origin values (`*`, `https:`, `https://*`).**
+  Without that check the missing knob above was bypassable by `ScriptSources: {"'unsafe-inline'"}`.
+  `New` returns the error; `Middleware` panics on it, because config is fixed at startup and failing
+  there beats serving a loosened CSP. `ContentSecurityPolicy` is deliberately not validated.
 - **`object-src` / `base-uri` / `frame-ancestors` / `form-action` have no knobs.** There is no reason to
   loosen them, and a silently loosened one costs more than the missing option.
 - **Taking a whole CSP string (`ContentSecurityPolicy`) is the escape hatch, not the interface.** Passing
@@ -98,11 +105,16 @@ Each package is imported on its own; nothing here imports anything else here.
 ### `staticfiles`
 
 - **Own files get 5 minutes, `vendor/` gets a year of `immutable`.** A `//go:embed` FileServer emits
-  neither `Last-Modified` nor `ETag`, so every expiry is a full refetch; versioned vendor paths are split
-  out to avoid it.
+  no `Last-Modified`, so revalidation depends on the kit's `ETag`; versioned vendor paths are split
+  out to avoid even that round trip.
+- **`ETag` is computed once in `New` from file contents** (SHA-256 truncated to 128 bits, strong
+  validator), and `http.FileServer` turns a matching `If-None-Match` into a 304. This assumes the FS is
+  immutable after startup, which is true of `embed.FS`; `DisableETag` exists for `os.DirFS` in
+  development, where a stale tag would 304 old content.
 - **404s carry no `Cache-Control`.** A year of `immutable` on a missing vendor path would hide a file
   added later for that entire year.
 - **Directories 404 instead of listing.** `http.FileServer` would otherwise serve an index of `/static/`.
+  `index.html` 404s for the same reason: `FileServer` 301s it to the directory.
 - **`New` checks that `Dir` exists.** `fs.Sub` does not error on a missing directory, so a renamed embed
   target would surface as universal 404s at runtime instead of a startup failure.
 

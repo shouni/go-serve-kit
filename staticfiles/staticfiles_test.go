@@ -1,6 +1,8 @@
 package staticfiles_test
 
 import (
+	"errors"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -174,5 +176,121 @@ func TestNewRejectsBadConfig(t *testing.T) {
 		if _, err := staticfiles.New(tt.cfg); err == nil {
 			t.Errorf("%s: New() error = nil, want error", tt.name)
 		}
+	}
+}
+
+// TestETagEnablesConditionalRequests は、中身から作った ETag が付き、If-None-Match が
+// 一致すれば 304 で済むことを確認します。埋め込んだ FileServer は Last-Modified を出せないので、
+// これが無いと 5 分ごとに全体を取り直します。
+func TestETagEnablesConditionalRequests(t *testing.T) {
+	t.Parallel()
+
+	h := newHandler(t, staticfiles.Config{FS: testFS(), Dir: "static"})
+
+	first := get(h, http.MethodGet, "/static/css/app.css")
+	tag := first.Header().Get("ETag")
+	if tag == "" || !strings.HasPrefix(tag, `"`) || !strings.HasSuffix(tag, `"`) {
+		t.Fatalf("ETag = %q, want a quoted strong validator", tag)
+	}
+	if other := get(h, http.MethodGet, "/static/vendor/bootstrap-5.3.8/bootstrap.css").Header().Get("ETag"); other == tag {
+		t.Errorf("different contents share ETag %q", tag)
+	}
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/static/css/app.css", nil)
+	req.Header.Set("If-None-Match", tag)
+	h.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotModified {
+		t.Errorf("status = %d, want 304", rec.Code)
+	}
+	if rec.Body.Len() != 0 {
+		t.Errorf("304 carries a body: %q", rec.Body.String())
+	}
+	// 304 にも Cache-Control を付けて、鮮度を延ばす。
+	if got := rec.Header().Get("Cache-Control"); got != staticfiles.DefaultOwnCacheControl {
+		t.Errorf("304 Cache-Control = %q, want %q", got, staticfiles.DefaultOwnCacheControl)
+	}
+
+	// 中身が変われば ETag も変わり、古い検証子では 200 で取り直す。
+	changed := testFS()
+	changed["static/css/app.css"] = &fstest.MapFile{Data: []byte("body{margin:0}")}
+	rec = httptest.NewRecorder()
+	req = httptest.NewRequest(http.MethodGet, "/static/css/app.css", nil)
+	req.Header.Set("If-None-Match", tag)
+	newHandler(t, staticfiles.Config{FS: changed, Dir: "static"}).ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || rec.Header().Get("ETag") == tag {
+		t.Errorf("changed file: status = %d, ETag = %q; want 200 with a new ETag", rec.Code, rec.Header().Get("ETag"))
+	}
+
+	if got := get(h, http.MethodGet, "/static/css/missing.css").Header().Get("ETag"); got != "" {
+		t.Errorf("404 ETag = %q, want none", got)
+	}
+}
+
+// TestDisableETag は、FS が起動後に変わる場合に ETag を止められることを確認します。
+func TestDisableETag(t *testing.T) {
+	t.Parallel()
+
+	h := newHandler(t, staticfiles.Config{FS: testFS(), Dir: "static", DisableETag: true})
+
+	rec := get(h, http.MethodGet, "/static/css/app.css")
+	if rec.Code != http.StatusOK {
+		t.Errorf("status = %d, want 200", rec.Code)
+	}
+	if got := rec.Header().Get("ETag"); got != "" {
+		t.Errorf("ETag = %q, want none with DisableETag", got)
+	}
+}
+
+// TestIndexHTMLIsNotRedirected は、index.html がディレクトリへの 301 にならないことを確認します。
+// http.FileServer は ".../index.html" を "./" へ転送し、そこで一覧を出そうとします。
+func TestIndexHTMLIsNotRedirected(t *testing.T) {
+	t.Parallel()
+
+	files := testFS()
+	files["static/index.html"] = &fstest.MapFile{Data: []byte("<p>")}
+	files["static/docs/index.html"] = &fstest.MapFile{Data: []byte("<p>")}
+	h := newHandler(t, staticfiles.Config{FS: files, Dir: "static"})
+
+	for _, target := range []string{"/static/index.html", "/static/docs/index.html"} {
+		rec := get(h, http.MethodGet, target)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("%s: status = %d, want 404", target, rec.Code)
+		}
+		if got := rec.Header().Get("Location"); got != "" {
+			t.Errorf("%s: Location = %q, want no redirect", target, got)
+		}
+		if got := rec.Header().Get("Cache-Control"); got != "" {
+			t.Errorf("%s: Cache-Control = %q, want none", target, got)
+		}
+	}
+}
+
+// unreadableFS は、特定のファイルだけ開けない FS です。ETag の計算が読めない
+// ファイルに当たったとき、黙って ETag 無しで配信せず、起動で止まることを見るためです。
+type unreadableFS struct {
+	fs.FS
+	name string
+}
+
+func (u unreadableFS) Open(name string) (fs.File, error) {
+	if name == u.name {
+		return nil, &fs.PathError{Op: "open", Path: name, Err: errors.New("unreadable")}
+	}
+	return u.FS.Open(name)
+}
+
+// TestNewFailsWhenETagCannotBeComputed は、ETag を計算できないファイルがあれば New が
+// エラーを返し、DisableETag なら読まずに構築できることを確認します。
+func TestNewFailsWhenETagCannotBeComputed(t *testing.T) {
+	t.Parallel()
+
+	broken := unreadableFS{FS: testFS(), name: "static/css/app.css"}
+	if _, err := staticfiles.New(staticfiles.Config{FS: broken, Dir: "static"}); err == nil {
+		t.Error("New() error = nil, want error for an unreadable file")
+	}
+	if _, err := staticfiles.New(staticfiles.Config{FS: broken, Dir: "static", DisableETag: true}); err != nil {
+		t.Errorf("New() with DisableETag error = %v, want nil", err)
 	}
 }

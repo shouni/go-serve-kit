@@ -11,6 +11,8 @@
 package secureheaders
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
@@ -86,8 +88,29 @@ type Config struct {
 
 // Middleware は、設定に基づく防御的ヘッダーを全応答へ付けるミドルウェアを返します。
 //
-// ヘッダーの値はリクエストごとに変わらないため、組み立ては 1 度だけ行います。
+// 設定が不正なら panic します（New が返すエラーと同じ内容です）。設定は起動時に
+// 固定される値で、不正なまま起動して緩んだ CSP を出し続けるより、起動で落ちるほうが
+// 安全なためです。エラーとして受け取りたい場合は New を使ってください。
 func Middleware(cfg Config) func(http.Handler) http.Handler {
+	mw, err := New(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return mw
+}
+
+// New は Middleware と同じミドルウェアを返し、設定が不正ならエラーを返します。
+//
+// 不正とみなすのは、*Sources に CSP のキーワード（'unsafe-inline' 等）や、
+// 起点を 1 つも特定しない値（"*" や "https:"）が入っている場合です。*Sources は
+// 外部オリジンを足すためのもので、ここからキーワードが入ると、用意していない
+// 「インラインスクリプトの許可」が設定の形を変えずに通ってしまいます。
+//
+// ヘッダーの値はリクエストごとに変わらないため、組み立ては 1 度だけ行います。
+func New(cfg Config) (func(http.Handler) http.Handler, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	values := cfg.headers()
 
 	return func(next http.Handler) http.Handler {
@@ -98,8 +121,58 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
-	}
+	}, nil
 }
+
+// validate は *Sources の各要素を検査します。ContentSecurityPolicy は最後の手段として
+// 呼び出し側の責任に置いているので、ここでは見ません。
+func (c Config) validate() error {
+	lists := []struct {
+		field   string
+		sources []string
+	}{
+		{"ImageSources", c.ImageSources},
+		{"MediaSources", c.MediaSources},
+		{"ScriptSources", c.ScriptSources},
+		{"StyleSources", c.StyleSources},
+		{"ConnectSources", c.ConnectSources},
+	}
+	for _, list := range lists {
+		for i, source := range list.sources {
+			if err := validateSource(source); err != nil {
+				return fmt.Errorf("secureheaders: Config.%s[%d] = %q: %w", list.field, i, source, err)
+			}
+		}
+	}
+	return nil
+}
+
+// anyOriginSources は、ネットワーク上のあらゆる起点を許す source 式です。
+// これを足すと、そのディレクティブは無いのと同じになります。
+var anyOriginSources = map[string]bool{
+	"*":     true,
+	"http:": true, "https:": true, "ws:": true, "wss:": true,
+	"http://*": true, "https://*": true, "ws://*": true, "wss://*": true,
+}
+
+// validateSource は 1 つの source 式を検査します。空白のみは sourceList が落とすので通します。
+func validateSource(source string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(source))
+	switch {
+	case trimmed == "":
+		return nil
+	case strings.HasPrefix(trimmed, "'"):
+		return errKeywordSource
+	case anyOriginSources[trimmed]:
+		return errAnyOriginSource
+	}
+	return nil
+}
+
+var (
+	errKeywordSource   = errors.New("CSP keywords are not accepted in *Sources; use AllowInlineStyle for inline style")
+	errAnyOriginSource = errors.New("source allows any origin, which disables the directive")
+)
 
 // headers は、実際に付ける名前と値の対応を組み立てます。
 func (c Config) headers() map[string]string {

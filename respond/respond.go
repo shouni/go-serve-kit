@@ -61,8 +61,16 @@ var encodeFailureBody = []byte(`{"error":"Internal Server Error"}` + "\n")
 //
 // Vary: Accept は立てません。表現を出し分けるかどうかを知っているのは
 // WantsJSON を呼んだ側で、JSON しか返さない経路に Vary は要らないためです。
+//
+// 本文を持てない状態コード（1xx / 204 / 304）では payload を捨て、状態コードだけを
+// 返します。net/http はそれらへの書き込みを拒むため、書こうとすると応答は正しく
+// 届くのに「書き出しに失敗」が毎回記録され、本当の失敗が埋もれます。
 func JSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	if w == nil {
+		return
+	}
+	if !bodyAllowed(status) {
+		w.WriteHeader(status)
 		return
 	}
 
@@ -112,6 +120,15 @@ func Error(w http.ResponseWriter, r *http.Request, status int, message string) {
 // Vary: Accept は立てません。この応答は Accept で変わらないためです。
 func ErrorJSON(w http.ResponseWriter, r *http.Request, status int, message string) {
 	JSON(w, r, status, errorBody{Error: message})
+}
+
+// bodyAllowed は、status の応答が本文を持てるかを返します。
+// 規則は net/http が Write を拒む条件（1xx / 204 / 304）と同じです。
+func bodyAllowed(status int) bool {
+	if status >= 100 && status <= 199 {
+		return false
+	}
+	return status != http.StatusNoContent && status != http.StatusNotModified
 }
 
 // requestContext は、r が nil でも使えるコンテキストを返します。

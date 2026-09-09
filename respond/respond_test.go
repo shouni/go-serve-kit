@@ -288,3 +288,50 @@ func TestJSONLogsWriteFailure(t *testing.T) {
 		t.Errorf("書き出し失敗が記録されていません: %s", logs.String())
 	}
 }
+
+// TestJSONSkipsBodyForBodilessStatus は、本文を持てない状態コードで本文を書かず、
+// 失敗も記録しないことを検証します。net/http は 204 への Write を拒むので、書こうと
+// すると応答は正しいのに毎回 ERROR が残り、本当の書き出し失敗が埋もれます。
+func TestJSONSkipsBodyForBodilessStatus(t *testing.T) {
+	var logs bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	// 実サーバーで確かめる。httptest.ResponseRecorder は 204 への Write を拒まないため、
+	// レコーダーだけでは net/http の挙動を再現できない。
+	// 1xx は net/http が中間応答として扱い最終応答にならないので、下のレコーダーで見る。
+	for _, status := range []int{http.StatusNoContent, http.StatusNotModified} {
+		logs.Reset()
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			respond.JSON(w, r, status, map[string]string{"ignored": "yes"})
+		}))
+		req, _ := http.NewRequestWithContext(t.Context(), http.MethodGet, srv.URL, nil)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			srv.Close()
+			t.Fatalf("%d: request failed: %v", status, err)
+		}
+		_ = resp.Body.Close()
+		srv.Close()
+
+		if resp.StatusCode != status {
+			t.Errorf("status = %d, want %d", resp.StatusCode, status)
+		}
+		if got := resp.Header.Get("Content-Type"); got != "" {
+			t.Errorf("%d: Content-Type = %q, want none（本文が無い）", status, got)
+		}
+		if logs.Len() != 0 {
+			t.Errorf("%d: unexpected log: %s", status, logs.String())
+		}
+	}
+
+	// レコーダー上でも本文が空であることを直接確かめる（1xx はここでしか見られない）。
+	for _, status := range []int{http.StatusContinue, http.StatusNoContent, http.StatusNotModified} {
+		rec := httptest.NewRecorder()
+		respond.JSON(rec, nil, status, map[string]string{"ignored": "yes"})
+		if rec.Code != status || rec.Body.Len() != 0 {
+			t.Errorf("status = %d, body = %q; want %d and empty body", rec.Code, rec.Body.String(), status)
+		}
+	}
+}

@@ -254,3 +254,62 @@ func TestHardenedDirectivesHaveNoKnob(t *testing.T) {
 		}
 	}
 }
+
+// TestSourcesRejectKeywordsAndWildcards は、*Sources 経由で CSP のキーワードや
+// 全起点の許可が入らないことを検証します。script-src に 'unsafe-inline' を足す
+// 手段は用意していませんが、リストが何でも受けるなら、その不在に意味がありません。
+func TestSourcesRejectKeywordsAndWildcards(t *testing.T) {
+	bad := []string{
+		"'unsafe-inline'", "'UNSAFE-EVAL'", "'strict-dynamic'", " 'self' ",
+		"*", "https:", "HTTPS://*", "wss:", "http://*",
+	}
+	for _, source := range bad {
+		for name, cfg := range map[string]secureheaders.Config{
+			"ScriptSources":  {ScriptSources: []string{source}},
+			"StyleSources":   {StyleSources: []string{source}},
+			"ImageSources":   {ImageSources: []string{source}},
+			"MediaSources":   {MediaSources: []string{source}},
+			"ConnectSources": {ConnectSources: []string{source}},
+		} {
+			mw, err := secureheaders.New(cfg)
+			if err == nil {
+				t.Errorf("%s = %q: New() error = nil, want error", name, source)
+			}
+			if mw != nil {
+				t.Errorf("%s = %q: New() returned a middleware alongside the error", name, source)
+			}
+			if err != nil && !strings.Contains(err.Error(), name) {
+				t.Errorf("%s = %q: error does not name the field: %v", name, source, err)
+			}
+		}
+	}
+
+	// 起点を特定している値は通す。サブドメインのワイルドカードや blob: も、
+	// 許す範囲が同一オリジンや特定ホストに閉じているので受け付ける。
+	good := []string{"https://example.com", "https://*.example.com", "blob:", "example.com:8443", ""}
+	if _, err := secureheaders.New(secureheaders.Config{
+		ScriptSources: good, StyleSources: good, ImageSources: good, MediaSources: good, ConnectSources: good,
+	}); err != nil {
+		t.Errorf("New() error = %v, want nil for origin sources", err)
+	}
+}
+
+// TestMiddlewarePanicsOnInvalidConfig は、Middleware が不正な設定で起動時に落ちることを
+// 検証します。緩んだ CSP を出し続けるより、起動で止まるほうが安全です。
+func TestMiddlewarePanicsOnInvalidConfig(t *testing.T) {
+	defer func() {
+		if recover() == nil {
+			t.Error("Middleware() did not panic on 'unsafe-inline' in ScriptSources")
+		}
+	}()
+	secureheaders.Middleware(secureheaders.Config{ScriptSources: []string{"'unsafe-inline'"}})
+}
+
+// TestExplicitCSPIsNotValidated は、CSP 全体の指定が検査の対象外であることを固定します。
+// 最後の手段として、責任ごと呼び出し側へ渡す約束のためです。
+func TestExplicitCSPIsNotValidated(t *testing.T) {
+	const custom = "script-src 'unsafe-inline'"
+	if got := serve(t, secureheaders.Config{ContentSecurityPolicy: custom}).Get("Content-Security-Policy"); got != custom {
+		t.Errorf("CSP = %q, want %q", got, custom)
+	}
+}

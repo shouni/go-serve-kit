@@ -32,6 +32,7 @@
   * `JSON` は**バッファへ組み立ててから送ります**。途中で失敗しうる値（`chan`、循環参照、
     エラーを返す `MarshalJSON`）を直接流すと、書けたところまでの壊れた JSON が 200 のまま
     届くためです。失敗した場合は 500 と `{"error": ...}` を返します。
+    本文を持てない状態コード（1xx / 204 / 304）では payload を捨て、状態コードだけを返します。
 * **`secureheaders`**: CSP・HSTS・`nosniff`・`Referrer-Policy`・`Permissions-Policy` を全応答へ付与
   * CSP は開けたいディレクティブだけを `Config` で渡せば、残りはキットが組み立てます
     （`ImageSources` / `MediaSources` / `ScriptSources` / `StyleSources` / `ConnectSources`）。
@@ -44,6 +45,9 @@
     自前配信している前提です。CDN を `script-src` の allowlist に載せない理由は、jsDelivr のような
     ホストが npm の全パッケージを配信しており、「任意の npm パッケージの読み込みを許可する」に
     等しくなるためです。
+  * **`*Sources` は外部オリジンの一覧で、CSP のキーワードや全起点の許可は受け付けません。**
+    `'unsafe-inline'` や `*`、`https:` を渡すと `New` はエラーを返し、`Middleware` は panic します。
+    リストが何でも受けるなら、`script-src` にインラインの knob が無いことに意味がなくなるためです。
   * **`'unsafe-inline'` は既定で付きません。** インラインスタイルを当てる JS を積んでいる場合
     （Bootstrap の collapse / tab が該当します）だけ `AllowInlineStyle: true` を渡してください。
     既定を厳格にしてあるので、**どのアプリがこれを必要としているかが設定に現れます**。
@@ -52,12 +56,15 @@
   * HSTS は既定 1 年で、`preload` は付けません（撤回にブラウザベンダーへの申請が要るため）。
     負値を渡すと付与しません。
 * **`staticfiles`**: 埋め込んだ CSS / JS の配信と、パスで決まる `Cache-Control`
-  * **自前のファイルは 5 分、`vendor/` 配下は 1 年の `immutable`** です。`//go:embed` した FileServer は
-    `Last-Modified` も `ETag` も出せないので、期限が切れると必ず全体を取り直します。バージョンが
-    パスに入る vendor を分けているのは、その再取得を無くすためです。
+  * **自前のファイルは 5 分、`vendor/` 配下は 1 年の `immutable`** です。バージョンがパスに入る
+    vendor を分けているのは、期限切れの再検証の往復そのものを無くすためです。
+  * **`ETag` は `New` の時点で中身から計算します。** `//go:embed` した FileServer は `Last-Modified` を
+    出せないので、これが無いと期限が切れるたびに全体を取り直します。FS が起動後に変わる場合
+    （`os.DirFS` で開発中など）は `DisableETag: true` にしてください。
   * **404 には `Cache-Control` を付けません。** 無い vendor パスに 1 年の `immutable` が付くと、
     後から置いたファイルがその期間ブラウザに届きません。
   * **ディレクトリは一覧を出さず 404 です。** `http.FileServer` は既定で `/static/` の一覧を返します。
+    `index.html` も同じ理由で 404 です（FileServer はディレクトリへの 301 に変えます）。
   * **`Dir` の実在は `New` が確かめます。** `fs.Sub` は無いディレクトリでもエラーを返さないので、
     埋め込み先の名前を変えただけの取り違えが、起動時ではなく全 404 として現れます。
 * **`serverrole`**: `web` / `worker` / `both` の語彙と `Parse`

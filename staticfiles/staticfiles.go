@@ -4,11 +4,17 @@
 // 前者は URL を変えずに中身が変わるので短命に、後者はパスにバージョンが入るので不変として
 // 扱います。この使い分けと定数を 5 つの兄弟アプリが同じ 30 行で持っていました。
 //
+// ETag は New の時点で中身から計算して付けます。埋め込んだ FS は起動後に変わらないので、
+// 期限切れの再検証を 304 で済ませられます（FileServer 単体では Last-Modified も ETag も
+// 出せず、期限が切れるたびに全体を取り直していました）。
+//
 //	files, err := staticfiles.New(staticfiles.Config{FS: assets.StaticFiles, Dir: "static"})
 //	mux.Handle("/static/", files) // chi なら r.Handle("/static/*", files)
 package staticfiles
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,9 +35,9 @@ const (
 
 	// DefaultOwnCacheControl は自前の CSS / JS 用です。URL を変えずに中身が変わるため短命にします。
 	//
-	// //go:embed した FileServer は Last-Modified も ETag も出せない（embed の ModTime が
-	// ゼロ値のため net/http が両方を省く）ので、期限が切れた時点で必ず全体を取り直します。
-	// バージョン付きの vendor を分けているのは、その再取得を無くすためです。
+	// //go:embed した FileServer は Last-Modified を出せない（embed の ModTime がゼロ値のため
+	// net/http が省く）ので、再検証はこのパッケージが付ける ETag に頼ります。期限が切れると
+	// If-None-Match の往復が必ず 1 回入るため、バージョン付きの vendor は分けて往復自体を無くします。
 	DefaultOwnCacheControl = "public, max-age=300, must-revalidate"
 
 	// DefaultVendorCacheControl は DefaultVendorDir 配下用です。
@@ -56,6 +62,13 @@ type Config struct {
 	// OwnCacheControl / VendorCacheControl は、それぞれの Cache-Control を差し替えます。
 	OwnCacheControl    string
 	VendorCacheControl string
+
+	// DisableETag は ETag の計算と付与を止めます。
+	//
+	// ETag は New の時点で全ファイルの中身から計算し、以後は変わりません。FS が起動後に
+	// 変わる場合（os.DirFS で開発中など）は古い ETag に 304 を返してしまうので、true にします。
+	// //go:embed した FS では不要です。
+	DisableETag bool
 }
 
 // New は静的ファイルを配信する http.Handler を返します。
@@ -64,6 +77,12 @@ type Config struct {
 // 404 で、Cache-Control は付けません（1 年の immutable を 404 に付けると、後から置いた
 // ファイルがその期間ブラウザに届きません）。パスの解決は net/http に委ねているので、
 // ".." による脱出はそちらが塞ぎます。
+//
+// index.html は配信しません。http.FileServer は ".../index.html" をディレクトリへの
+// 301 に変えるため、ディレクトリを 404 にしている以上、その入口も閉じておきます。
+//
+// ETag は DisableETag でない限り、ここで Dir 配下の全ファイルを読んで計算します。
+// 起動時に 1 度だけ走る処理で、埋め込んだ静的ファイルの量なら無視できる時間です。
 func New(cfg Config) (http.Handler, error) {
 	if cfg.FS == nil {
 		return nil, errors.New("staticfiles: Config.FS must not be nil")
@@ -97,6 +116,15 @@ func New(cfg Config) (http.Handler, error) {
 	own := orDefault(cfg.OwnCacheControl, DefaultOwnCacheControl)
 	vendor := orDefault(cfg.VendorCacheControl, DefaultVendorCacheControl)
 
+	var etags map[string]string
+	if !cfg.DisableETag {
+		tags, err := computeETags(root)
+		if err != nil {
+			return nil, err
+		}
+		etags = tags
+	}
+
 	files := http.StripPrefix(prefix, http.FileServer(http.FS(root)))
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,7 +142,7 @@ func New(cfg Config) (http.Handler, error) {
 		// FileServer と同じ正規化を先に掛けて、実在するファイルかを見ます。ディレクトリは
 		// 一覧を出さず、無いものには Cache-Control を付けません。
 		name := strings.TrimPrefix(path.Clean("/"+rel), "/")
-		if name == "" || !fs.ValidPath(name) {
+		if name == "" || !fs.ValidPath(name) || path.Base(name) == indexPage {
 			http.NotFound(w, r)
 			return
 		}
@@ -129,8 +157,43 @@ func New(cfg Config) (http.Handler, error) {
 		} else {
 			w.Header().Set("Cache-Control", own)
 		}
+		// FileServer は呼び出し側が先に置いた ETag を If-None-Match の照合に使い、
+		// 一致すれば 304 を返します。
+		if tag, ok := etags[name]; ok {
+			w.Header().Set("ETag", tag)
+		}
 		files.ServeHTTP(w, r)
 	}), nil
+}
+
+// indexPage は http.FileServer がディレクトリへの 301 に変えるファイル名です。
+const indexPage = "index.html"
+
+// computeETags は root 配下の全ファイルについて、中身のハッシュから強い ETag を作ります。
+//
+// ハッシュは SHA-256 の先頭 128 ビットです。衝突を気にする長さとして十分で、ヘッダーに
+// 載せる文字数は抑えられます。
+func computeETags(root fs.FS) (map[string]string, error) {
+	etags := make(map[string]string)
+	err := fs.WalkDir(root, ".", func(name string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		data, err := fs.ReadFile(root, name)
+		if err != nil {
+			return err
+		}
+		sum := sha256.Sum256(data)
+		etags[name] = `"` + hex.EncodeToString(sum[:16]) + `"`
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("staticfiles: computing ETags: %w", err)
+	}
+	return etags, nil
 }
 
 func orDefault(value, fallback string) string {
