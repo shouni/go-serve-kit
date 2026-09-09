@@ -2,8 +2,8 @@
 // 全応答へ付けるミドルウェアを提供します。
 //
 // 既定は「外部オリジンを 1 つも許可せず、インラインスタイルも許さない」です。
-// 第三者製の JS/CSS を CDN からではなく自前配信していること（assets/static/vendor）
-// を前提にしており、足りない分は Config の *Sources と AllowInlineStyle で開けます。
+// 第三者製の JS/CSS を CDN からではなく自前配信していることを前提にしており、
+// 足りない分は Config の *Sources と AllowInlineStyle で開けます。
 //
 //	r.Use(secureheaders.Middleware(secureheaders.Config{
 //	    MediaSources: []string{"https://storage.googleapis.com"},
@@ -11,43 +11,44 @@
 package secureheaders
 
 import (
+	"errors"
+	"fmt"
 	"net/http"
 	"strconv"
 	"strings"
 	"time"
 )
 
-// 既定値。5 つの兄弟アプリが 1 バイト違わず同じ値を持っていたものです。
 const (
-	// DefaultReferrerPolicy は same-origin です。外部オリジンへの参照を 1 つも
-	// 持たないため、ここまで絞れます。唯一の越境は署名付き URL への 302 で、
-	// GCS は Referer を見ません。
+	// DefaultReferrerPolicy は same-origin です。既定の CSP が外部オリジンへの参照を
+	// 1 つも許さない以上、Referer を外へ出す理由もありません。
 	DefaultReferrerPolicy = "same-origin"
 
-	// DefaultPermissionsPolicy は、使っていない機能だけを塞ぎます。
-	// autoplay は入れません。履歴画面が音声や動画を続けて再生するためです。
+	// DefaultPermissionsPolicy は、ブラウザ向けサービスがまず使わない機能だけを塞ぎます。
+	// autoplay は入れません。音声や動画を続けて再生する画面を妨げるためです。
 	DefaultPermissionsPolicy = "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
 
-	// DefaultHSTSMaxAge は 1 年です。Cloud Run は HTTPS でしか受けないので
-	// 現状の実害はありませんが、独自ドメインを当てたときに平文へ降格させない
-	// ための宣言です。preload は付けません（撤回にブラウザベンダーへの申請が
-	// 要るうえ、得るものが少ないため）。
+	// DefaultHSTSMaxAge は 1 年です。preload は付けません（撤回にブラウザベンダーへの
+	// 申請が要るうえ、得るものが少ないため）。
 	DefaultHSTSMaxAge = 365 * 24 * time.Hour
 )
 
 // Config は付与するヘッダーの設定です。すべて任意で、ゼロ値は既定へ倒れます。
 type Config struct {
 	// ImageSources / MediaSources は、CSP の img-src / media-src に足す
-	// 外部オリジンです。GCS の署名付き URL へ 302 する画面がここを要します。
+	// 外部オリジンです。
 	//
-	// 画面が指すのは同一オリジンのエンドポイントですが、そこから GCS へ
-	// リダイレクトします。リダイレクト先を CSP がどう扱うかはブラウザ実装に
-	// 幅があるため、送り先を明示して依存しないようにします。
+	// 同一オリジンのエンドポイントから外部ストレージの署名付き URL へ 302 する場合も、
+	// リダイレクト先をここに足してください。リダイレクト先を CSP がどう扱うかは
+	// ブラウザ実装に幅があるため、明示して依存しないようにします。
 	ImageSources []string
 	MediaSources []string
 
 	// ScriptSources / StyleSources / ConnectSources は、それぞれ script-src /
 	// style-src / connect-src に足す外部オリジンです。
+	//
+	// *Sources に置けるのはオリジン（とスキーム）だけです。'unsafe-inline' 等の
+	// キーワードや、"*" / "https:" のように起点を特定しない値は New が拒みます。
 	//
 	// CDN を script-src に載せるのは避けてください。jsDelivr のようなホストは
 	// npm の全パッケージを配信しているため、「任意の npm パッケージの読み込みを
@@ -84,10 +85,30 @@ type Config struct {
 	HSTSMaxAge time.Duration
 }
 
-// Middleware は、設定に基づく防御的ヘッダーを全応答へ付けるミドルウェアを返します。
+// Middleware は New と同じミドルウェアを返し、設定が不正なら panic します。
+//
+// 設定は起動時に固定される値なので、緩んだ CSP を出し続けるより起動で落とします。
+// エラーとして受け取りたい場合は New を使ってください。
+func Middleware(cfg Config) func(http.Handler) http.Handler {
+	mw, err := New(cfg)
+	if err != nil {
+		panic(err)
+	}
+	return mw
+}
+
+// New は、設定に基づく防御的ヘッダーを全応答へ付けるミドルウェアを返します。
+//
+// *Sources に CSP のキーワード（'unsafe-inline' 等）や、起点を 1 つも特定しない値
+// （"*" や "https:"）が入っていればエラーです。ここからキーワードが入ると、用意していない
+// 「インラインスクリプトの許可」が設定の形を変えずに通ってしまいます。
+// ContentSecurityPolicy は最後の手段として呼び出し側の責任に置いているので、検査しません。
 //
 // ヘッダーの値はリクエストごとに変わらないため、組み立ては 1 度だけ行います。
-func Middleware(cfg Config) func(http.Handler) http.Handler {
+func New(cfg Config) (func(http.Handler) http.Handler, error) {
+	if err := cfg.validate(); err != nil {
+		return nil, err
+	}
 	values := cfg.headers()
 
 	return func(next http.Handler) http.Handler {
@@ -98,18 +119,65 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
-	}
+	}, nil
 }
+
+// validate は *Sources の各要素を検査します。
+func (c Config) validate() error {
+	lists := []struct {
+		field   string
+		sources []string
+	}{
+		{"ImageSources", c.ImageSources},
+		{"MediaSources", c.MediaSources},
+		{"ScriptSources", c.ScriptSources},
+		{"StyleSources", c.StyleSources},
+		{"ConnectSources", c.ConnectSources},
+	}
+	for _, list := range lists {
+		for i, source := range list.sources {
+			if err := validateSource(source); err != nil {
+				return fmt.Errorf("secureheaders: Config.%s[%d] = %q: %w", list.field, i, source, err)
+			}
+		}
+	}
+	return nil
+}
+
+// anyOriginSources は、ネットワーク上のあらゆる起点を許す source 式です。
+// これを足すと、そのディレクティブは無いのと同じになります。
+var anyOriginSources = map[string]bool{
+	"*":     true,
+	"http:": true, "https:": true, "ws:": true, "wss:": true,
+	"http://*": true, "https://*": true, "ws://*": true, "wss://*": true,
+}
+
+// validateSource は 1 つの source 式を検査します。空白のみは sourceList が落とすので通します。
+func validateSource(source string) error {
+	trimmed := strings.ToLower(strings.TrimSpace(source))
+	switch {
+	case trimmed == "":
+		return nil
+	case strings.HasPrefix(trimmed, "'"):
+		return errKeywordSource
+	case anyOriginSources[trimmed]:
+		return errAnyOriginSource
+	}
+	return nil
+}
+
+var (
+	errKeywordSource   = errors.New("CSP keywords are not accepted in *Sources; use AllowInlineStyle for inline style")
+	errAnyOriginSource = errors.New("source allows any origin, which disables the directive")
+)
 
 // headers は、実際に付ける名前と値の対応を組み立てます。
 func (c Config) headers() map[string]string {
 	values := map[string]string{
 		"Content-Security-Policy": c.contentSecurityPolicy(),
-		// MIME スニッフィングを止めます。署名付き URL へ 302 する経路があるため、
-		// 取り違えが起きたときの被害を型で抑えます。
-		"X-Content-Type-Options": "nosniff",
-		"Referrer-Policy":        orDefault(c.ReferrerPolicy, DefaultReferrerPolicy),
-		"Permissions-Policy":     orDefault(c.PermissionsPolicy, DefaultPermissionsPolicy),
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         orDefault(c.ReferrerPolicy, DefaultReferrerPolicy),
+		"Permissions-Policy":      orDefault(c.PermissionsPolicy, DefaultPermissionsPolicy),
 	}
 
 	if maxAge := c.hstsMaxAge(); maxAge > 0 {

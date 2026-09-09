@@ -23,18 +23,11 @@ import (
 
 // contentTypeJSON は JSON 応答に付ける Content-Type です。
 //
-// charset まで固定するのは、5 つの兄弟アプリが "application/json" と
-// "application/json; charset=utf-8" に割れていたためです。RFC 8259 が JSON を
-// UTF-8 と定めている以上どちらでも解釈は変わりませんが、値が混ざっていると
-// 応答を突き合わせる側（同じクライアントが 4 つのバックエンドを呼びます）が
-// 両方を書くことになります。片方に倒します。
+// RFC 8259 が JSON を UTF-8 と定めている以上 charset の有無で解釈は変わりませんが、
+// 複数のバックエンドを呼ぶクライアントが両方の値を扱うことにならないよう、片方に固定します。
 const contentTypeJSON = "application/json; charset=utf-8"
 
-// errorBody は、JSON を求めた呼び出し元へ返すエラー本文です。
-//
-// 形は {"error": "..."} です。兄弟アプリが既にこの形へ揃えており、
-// 以前 1 つだけ text/plain を返していたときは、同じクライアントから呼ぶのに
-// そこだけ本文の読み方が変わっていました。
+// errorBody は、JSON を求めた呼び出し元へ返すエラー本文 {"error": "..."} です。
 type errorBody struct {
 	Error string `json:"error"`
 }
@@ -61,8 +54,16 @@ var encodeFailureBody = []byte(`{"error":"Internal Server Error"}` + "\n")
 //
 // Vary: Accept は立てません。表現を出し分けるかどうかを知っているのは
 // WantsJSON を呼んだ側で、JSON しか返さない経路に Vary は要らないためです。
+//
+// 本文を持てない状態コード（1xx / 204 / 304）では payload を捨て、状態コードだけを
+// 返します。net/http はそれらへの書き込みを拒むため、書こうとすると応答は正しく
+// 届くのに「書き出しに失敗」が毎回記録され、本当の失敗が埋もれます。
 func JSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	if w == nil {
+		return
+	}
+	if !bodyAllowed(status) {
+		w.WriteHeader(status)
 		return
 	}
 
@@ -106,12 +107,20 @@ func Error(w http.ResponseWriter, r *http.Request, status int, message string) {
 //
 // JSON しか返さないルート用です。そういうルートは成功時も無条件に JSON を返すので、
 // エラーだけ Accept で形が変わると、呼び出し側は成功と失敗で本文の読み方を変えることに
-// なります。実際、Accept を送らないブラウザの fetch がエラー本文を JSON として読んでおり、
-// text/plain へ倒した結果サーバーの文言が届かなくなった、ということが起きました。
+// なります（Accept を送らないブラウザの fetch は、エラー本文も JSON として読みます）。
 //
 // Vary: Accept は立てません。この応答は Accept で変わらないためです。
 func ErrorJSON(w http.ResponseWriter, r *http.Request, status int, message string) {
 	JSON(w, r, status, errorBody{Error: message})
+}
+
+// bodyAllowed は、status の応答が本文を持てるかを返します。
+// 規則は net/http が Write を拒む条件（1xx / 204 / 304）と同じです。
+func bodyAllowed(status int) bool {
+	if status >= 100 && status <= 199 {
+		return false
+	}
+	return status != http.StatusNoContent && status != http.StatusNotModified
 }
 
 // requestContext は、r が nil でも使えるコンテキストを返します。
