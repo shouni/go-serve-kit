@@ -20,7 +20,7 @@ const (
 	Both Role = "both"
 	// Web は Web 面（ブラウザ向け UI とサービス間 API）だけを提供します。
 	Web Role = "web"
-	// Worker は Worker 面（Cloud Tasks から呼ばれる実行系）だけを提供します。
+	// Worker は Worker 面（タスクキューから呼ばれる実行系）だけを提供します。
 	Worker Role = "worker"
 )
 

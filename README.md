@@ -11,136 +11,78 @@
 ## 🚀 概要 (About) - 何を返すかだけを持ち、サーバーそのものは持たない
 
 **Go Serve Kit** は、HTTP サービスが応答を返す側で毎回書く定型（防御的ヘッダー・表現の出し分け・役割の宣言・静的ファイルの配信）を引き受けるツールキットです。
+`http.Server` もルーターも `main` も持たず、どの役割が何を提供するかも利用側のルーターが決めます。
 
 ---
 
 ## ✨ 提供機能 (Features)
 
 パッケージは独立しており、必要なものだけを import できます。ここに挙げるのは
-**知らずに踏むと高くつく前提**だけです。API の詳細と個々の判断理由は各パッケージの godoc にあります。
+**採否を左右する前提**だけです。API の詳細と個々の判断理由は各パッケージの godoc にあります。
 
-* **`respond`**: 応答の書き出しと、`Accept` による表現の選択
-  * `WantsJSON(w, r)` が表現を選び、**同時に `Vary: Accept` を立てます**。判定だけして宣言を忘れると、
-    共有キャッシュや CDN を前に置いたとき、JSON を求めたクライアントへ HTML が返ります。
-  * **判定は `application/json` の部分一致で、q 値は解釈しません。** したがって `*/*`（curl や多くの
-    HTTP クライアントの既定）は HTML 側に倒れ、`application/json;q=0` は JSON と判定されます。
-    JSON を期待する呼び出し元には、明示的な `Accept` を送らせてください。
-  * `JSON` / `Error` / `ErrorJSON` の**使い分けはルートの性質で決まります。** 画面と API が同じ URL を
-    共有するなら `Error`（相手が JSON を求めていれば `{"error": ...}`、そうでなければ `text/plain`）。
-    **JSON しか返さないルートは `ErrorJSON`** です — 成功時が無条件 JSON なのにエラーだけ `Accept` で
-    形が変わると、呼び出し側は成功と失敗で本文の読み方を変えることになります。
-  * `JSON` は**バッファへ組み立ててから送ります**。途中で失敗しうる値（`chan`、循環参照、
-    エラーを返す `MarshalJSON`）を直接流すと、書けたところまでの壊れた JSON が 200 のまま
-    届くためです。失敗した場合は 500 と `{"error": ...}` を返します。
-    本文を持てない状態コード（1xx / 204 / 304）では payload を捨て、状態コードだけを返します。
+* **`respond`**: 応答の書き出し（`JSON` / `Error` / `ErrorJSON`）と、`Accept` による表現の選択（`WantsJSON`）
+  * **判定は `application/json` の部分一致で、q 値は解釈しません。** `*/*`（curl や多くの HTTP
+    クライアントの既定）は HTML 側に倒れます。JSON を期待する呼び出し元には、明示的な `Accept` を送らせてください。
+  * `WantsJSON` は判定と同時に `Vary: Accept` を立てるので、`ResponseWriter` を要求します。
+    共有キャッシュや CDN を前に置いたとき、宣言を忘れると JSON を求めたクライアントへ HTML が返るためです。
 * **`secureheaders`**: CSP・HSTS・`nosniff`・`Referrer-Policy`・`Permissions-Policy` を全応答へ付与
-  * CSP は開けたいディレクティブだけを `Config` で渡せば、残りはキットが組み立てます
-    （`ImageSources` / `MediaSources` / `ScriptSources` / `StyleSources` / `ConnectSources`）。
-    CSP 全体を文字列で受け渡す形を既定にしないのは、`object-src 'none'` や `'self'` が
-    1 アプリずつ静かに抜け落ちるためです。`ContentSecurityPolicy` は最後の手段で、
-    渡した時点で `base-uri` などの責任も呼び出し側に移ります。
-  * **`object-src` / `base-uri` / `frame-ancestors` / `form-action` に調整点はありません。**
-    緩める理由が無く、緩んだ状態で気付かれないほうが高くつくためです。
-  * **既定は「外部オリジンを 1 つも許可しない」** で、第三者製の JS/CSS を CDN からではなく
-    自前配信している前提です。CDN を `script-src` の allowlist に載せない理由は、jsDelivr のような
-    ホストが npm の全パッケージを配信しており、「任意の npm パッケージの読み込みを許可する」に
-    等しくなるためです。
-  * **`*Sources` は外部オリジンの一覧で、CSP のキーワードや全起点の許可は受け付けません。**
-    `'unsafe-inline'` や `*`、`https:` を渡すと `New` はエラーを返し、`Middleware` は panic します。
-    リストが何でも受けるなら、`script-src` にインラインの knob が無いことに意味がなくなるためです。
-  * **`'unsafe-inline'` は既定で付きません。** インラインスタイルを当てる JS を積んでいる場合
-    （Bootstrap の collapse / tab が該当します）だけ `AllowInlineStyle: true` を渡してください。
-    既定を厳格にしてあるので、**どのアプリがこれを必要としているかが設定に現れます**。
-    `script-src` に対応する項目は用意していません。インラインスクリプトを許すと、
-    CSP が防いでいるものの大半が無くなるためです。
-  * HSTS は既定 1 年で、`preload` は付けません（撤回にブラウザベンダーへの申請が要るため）。
-    負値を渡すと付与しません。
-* **`staticfiles`**: 埋め込んだ CSS / JS の配信と、パスで決まる `Cache-Control`
-  * **自前のファイルは 5 分、`vendor/` 配下は 1 年の `immutable`** です。バージョンがパスに入る
-    vendor を分けているのは、期限切れの再検証の往復そのものを無くすためです。
-  * **`ETag` は `New` の時点で中身から計算します。** `//go:embed` した FileServer は `Last-Modified` を
-    出せないので、これが無いと期限が切れるたびに全体を取り直します。FS が起動後に変わる場合
-    （`os.DirFS` で開発中など）は `DisableETag: true` にしてください。
-  * **404 には `Cache-Control` を付けません。** 無い vendor パスに 1 年の `immutable` が付くと、
-    後から置いたファイルがその期間ブラウザに届きません。
-  * **ディレクトリは一覧を出さず 404 です。** `http.FileServer` は既定で `/static/` の一覧を返します。
-    `index.html` も同じ理由で 404 です（FileServer はディレクトリへの 301 に変えます）。
-  * **`Dir` の実在は `New` が確かめます。** `fs.Sub` は無いディレクトリでもエラーを返さないので、
-    埋め込み先の名前を変えただけの取り違えが、起動時ではなく全 404 として現れます。
+  * **既定は「外部オリジンを 1 つも許可せず、インラインスタイルも許さない」** で、第三者製の JS/CSS を
+    CDN からではなく自前配信している前提です。CDN を `script-src` に載せない理由は、jsDelivr のような
+    ホストが npm の全パッケージを配信しており、任意の npm パッケージの読み込みを許可するに等しくなるためです。
+  * 開けられるのは `Config` の `*Sources` と `AllowInlineStyle` だけで、**インラインスクリプトを許す手段はありません。**
+    `*Sources` にキーワードや `*` を渡すと起動時に落ちます。
+* **`staticfiles`**: 埋め込んだ CSS / JS の配信と、パスで決まる `Cache-Control` と `ETag`
+  * **自前のファイルは 5 分、`vendor/` 配下は 1 年の `immutable`** です。第三者製の配布物は、
+    パスにバージョンが入る形（`vendor/bootstrap-5.3.8/`）で `vendor/` の下に置いてください。
 * **`serverrole`**: `web` / `worker` / `both` の語彙と `Parse`
   * **未設定と未知の値はエラーです。** 未設定を `both` に倒すと、環境変数が 1 つ欠けただけで
-    公開している Web 面に Worker のルートが復活します。未知の値を黙って受け入れると、今度は
-    何のルートも提供しないサービスがデプロイされます。どちらも起動時に落とします。
-  * `Role` は `encoding.TextUnmarshaler` を実装しているので、`env:"SERVER_ROLE"` や JSON から
-    読む時点で `Parse` を通せます（未設定を弾くのは `,required` タグの役目です）。
-  * **キットは役割で分岐しません。** 各面が何を提供するかは利用側のルーターが決めます。4 つ目の
-    役割が要るアプリは、独自の定数を宣言して `Parse` を包めば、このパッケージを変更せずに足せます。
+    公開している Web 面に Worker のルートが復活します。
 
 ---
 
 ## 🚦 使い方 (Usage)
 
-1 つの `main` の中身を順に分けたものです。上から連結すればそのまま動きます。
-
-### 1. どの面を提供するかを決める
-
-役割は明示が必須です。ここで落とすことに意味があります。
+1 つの `main` で 4 パッケージを組み合わせた例です。分岐（`Error` と `ErrorJSON` の使い分け、
+設定構造体への直接バインド、ETag の無効化など）は
+[pkg.go.dev の Example](https://pkg.go.dev/github.com/shouni/go-serve-kit#section-directories) を参照してください。
 
 ```go
-role, err := serverrole.Parse(os.Getenv("SERVER_ROLE"))
-if err != nil {
-    return err // 未設定・未知の値はここで止めます
+func run() error {
+    role, err := serverrole.Parse(os.Getenv("SERVER_ROLE"))
+    if err != nil {
+        return err // 未設定・未知の値はここで止めます
+    }
+
+    files, err := staticfiles.New(staticfiles.Config{FS: assets.StaticFiles, Dir: "static"})
+    if err != nil {
+        return err // Dir の取り違えはここで止まります
+    }
+
+    mux := http.NewServeMux()
+    mux.Handle("/static/", files) // 認証の外側に置きます
+    if role.ServesWeb() {
+        mux.HandleFunc("GET /comics", listComics)
+    }
+    if role.ServesWorker() {
+        mux.Handle("POST /tasks/run", workerHandler)
+    }
+
+    handler := secureheaders.Middleware(secureheaders.Config{
+        MediaSources:     []string{"https://storage.example.com"}, // 署名付き URL へ 302 する場合
+        AllowInlineStyle: true,                                    // Bootstrap の collapse / tab を使う場合
+    })(mux)
+
+    srv := &http.Server{Addr: ":" + os.Getenv("PORT"), Handler: handler, ReadHeaderTimeout: 5 * time.Second}
+    return srv.ListenAndServe()
 }
 
-mux := http.NewServeMux()
-if role.ServesWeb() {
-    mux.Handle("GET /comics", http.HandlerFunc(listComics))
-}
-if role.ServesWorker() {
-    mux.Handle("POST /tasks/run", workerHandler)
-}
-```
-
-設定構造体へ直接バインドする場合は、`Parse` の呼び忘れが起きません。
-
-```go
-type Config struct {
-    Role serverrole.Role `env:"SERVER_ROLE,required"` // UnmarshalText が Parse を通します
-}
-```
-
-### 2. 防御的ヘッダーを全応答へ付ける
-
-外部オリジンを足すのは、実際に越境する `img-src` / `media-src` だけです。
-
-```go
-handler := secureheaders.Middleware(secureheaders.Config{
-    MediaSources:     []string{"https://storage.googleapis.com"}, // 署名付き URL へ 302 する場合
-    AllowInlineStyle: true,                                       // Bootstrap の collapse / tab を使う場合
-})(mux)
-
-srv := &http.Server{
-    Addr:              ":" + os.Getenv("PORT"),
-    Handler:           handler,
-    ReadHeaderTimeout: 5 * time.Second,
-}
-return srv.ListenAndServe()
-```
-
-### 3. 通した相手に合わせて表現を選ぶ
-
-1 本のルートで人（ブラウザ）と機械（エージェント）の両方へ答えます。画面用と API 用にルートを
-分けると同じ取得処理を 2 本持つことになり、片方だけ直したときに表示と機械可読な結果が食い違います。
-
-```go
+// 画面と API が同じ URL を共有するルートです。ルートは 1 本に保ち、表現だけを Accept で選びます。
 func listComics(w http.ResponseWriter, r *http.Request) {
     comics, err := store.List(r.Context())
     if err != nil {
-        // 画面と API が同じ URL を共有するルートなので Error を使います。
         respond.Error(w, r, http.StatusInternalServerError, "一覧を取得できませんでした")
         return
     }
-
     if respond.WantsJSON(w, r) { // Vary: Accept もここで立ちます
         respond.JSON(w, r, http.StatusOK, comics)
         return
@@ -148,38 +90,6 @@ func listComics(w http.ResponseWriter, r *http.Request) {
     _ = tmpl.Execute(w, page{Comics: comics})
 }
 ```
-
-JSON しか返さないルートでは、エラーの形を成功時と揃えます。
-
-```go
-func createComic(w http.ResponseWriter, r *http.Request) {
-    var req createRequest
-    if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-        // Accept を送らない fetch から呼ばれても {"error": ...} で返ります。
-        respond.ErrorJSON(w, r, http.StatusBadRequest, "リクエストを解釈できませんでした")
-        return
-    }
-    respond.JSON(w, r, http.StatusCreated, created)
-}
-```
-
-なお **JSON 対応物が無いもの（入力フォームなど）は別のリソース**なので、ルートは分けたままにします。
-`Accept` による出し分けは「1 つのリソースに 2 つの表現がある」場合のためのもので、
-`JSON` / `ErrorJSON` は表現が 1 つしかないルートで使います。
-
-### 4. 静的ファイルを配信する
-
-認証の外側に置きます。スタイルシートにログインを求める理由は無く、ログイン画面からも参照されます。
-
-```go
-files, err := staticfiles.New(staticfiles.Config{FS: assets.StaticFiles, Dir: "static"})
-if err != nil {
-    return err // Dir の取り違えはここで止まります
-}
-mux.Handle("/static/", files) // chi なら r.Handle("/static/*", files)
-```
-
-より詳しい例は [pkg.go.dev の Example](https://pkg.go.dev/github.com/shouni/go-serve-kit) を参照してください。
 
 ---
 

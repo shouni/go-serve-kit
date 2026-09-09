@@ -2,8 +2,8 @@
 // 全応答へ付けるミドルウェアを提供します。
 //
 // 既定は「外部オリジンを 1 つも許可せず、インラインスタイルも許さない」です。
-// 第三者製の JS/CSS を CDN からではなく自前配信していること（assets/static/vendor）
-// を前提にしており、足りない分は Config の *Sources と AllowInlineStyle で開けます。
+// 第三者製の JS/CSS を CDN からではなく自前配信していることを前提にしており、
+// 足りない分は Config の *Sources と AllowInlineStyle で開けます。
 //
 //	r.Use(secureheaders.Middleware(secureheaders.Config{
 //	    MediaSources: []string{"https://storage.googleapis.com"},
@@ -19,37 +19,36 @@ import (
 	"time"
 )
 
-// 既定値。5 つの兄弟アプリが 1 バイト違わず同じ値を持っていたものです。
 const (
-	// DefaultReferrerPolicy は same-origin です。外部オリジンへの参照を 1 つも
-	// 持たないため、ここまで絞れます。唯一の越境は署名付き URL への 302 で、
-	// GCS は Referer を見ません。
+	// DefaultReferrerPolicy は same-origin です。既定の CSP が外部オリジンへの参照を
+	// 1 つも許さない以上、Referer を外へ出す理由もありません。
 	DefaultReferrerPolicy = "same-origin"
 
-	// DefaultPermissionsPolicy は、使っていない機能だけを塞ぎます。
-	// autoplay は入れません。履歴画面が音声や動画を続けて再生するためです。
+	// DefaultPermissionsPolicy は、ブラウザ向けサービスがまず使わない機能だけを塞ぎます。
+	// autoplay は入れません。音声や動画を続けて再生する画面を妨げるためです。
 	DefaultPermissionsPolicy = "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
 
-	// DefaultHSTSMaxAge は 1 年です。Cloud Run は HTTPS でしか受けないので
-	// 現状の実害はありませんが、独自ドメインを当てたときに平文へ降格させない
-	// ための宣言です。preload は付けません（撤回にブラウザベンダーへの申請が
-	// 要るうえ、得るものが少ないため）。
+	// DefaultHSTSMaxAge は 1 年です。preload は付けません（撤回にブラウザベンダーへの
+	// 申請が要るうえ、得るものが少ないため）。
 	DefaultHSTSMaxAge = 365 * 24 * time.Hour
 )
 
 // Config は付与するヘッダーの設定です。すべて任意で、ゼロ値は既定へ倒れます。
 type Config struct {
 	// ImageSources / MediaSources は、CSP の img-src / media-src に足す
-	// 外部オリジンです。GCS の署名付き URL へ 302 する画面がここを要します。
+	// 外部オリジンです。
 	//
-	// 画面が指すのは同一オリジンのエンドポイントですが、そこから GCS へ
-	// リダイレクトします。リダイレクト先を CSP がどう扱うかはブラウザ実装に
-	// 幅があるため、送り先を明示して依存しないようにします。
+	// 同一オリジンのエンドポイントから外部ストレージの署名付き URL へ 302 する場合も、
+	// リダイレクト先をここに足してください。リダイレクト先を CSP がどう扱うかは
+	// ブラウザ実装に幅があるため、明示して依存しないようにします。
 	ImageSources []string
 	MediaSources []string
 
 	// ScriptSources / StyleSources / ConnectSources は、それぞれ script-src /
 	// style-src / connect-src に足す外部オリジンです。
+	//
+	// *Sources に置けるのはオリジン（とスキーム）だけです。'unsafe-inline' 等の
+	// キーワードや、"*" / "https:" のように起点を特定しない値は New が拒みます。
 	//
 	// CDN を script-src に載せるのは避けてください。jsDelivr のようなホストは
 	// npm の全パッケージを配信しているため、「任意の npm パッケージの読み込みを
@@ -86,11 +85,10 @@ type Config struct {
 	HSTSMaxAge time.Duration
 }
 
-// Middleware は、設定に基づく防御的ヘッダーを全応答へ付けるミドルウェアを返します。
+// Middleware は New と同じミドルウェアを返し、設定が不正なら panic します。
 //
-// 設定が不正なら panic します（New が返すエラーと同じ内容です）。設定は起動時に
-// 固定される値で、不正なまま起動して緩んだ CSP を出し続けるより、起動で落ちるほうが
-// 安全なためです。エラーとして受け取りたい場合は New を使ってください。
+// 設定は起動時に固定される値なので、緩んだ CSP を出し続けるより起動で落とします。
+// エラーとして受け取りたい場合は New を使ってください。
 func Middleware(cfg Config) func(http.Handler) http.Handler {
 	mw, err := New(cfg)
 	if err != nil {
@@ -99,12 +97,12 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 	return mw
 }
 
-// New は Middleware と同じミドルウェアを返し、設定が不正ならエラーを返します。
+// New は、設定に基づく防御的ヘッダーを全応答へ付けるミドルウェアを返します。
 //
-// 不正とみなすのは、*Sources に CSP のキーワード（'unsafe-inline' 等）や、
-// 起点を 1 つも特定しない値（"*" や "https:"）が入っている場合です。*Sources は
-// 外部オリジンを足すためのもので、ここからキーワードが入ると、用意していない
+// *Sources に CSP のキーワード（'unsafe-inline' 等）や、起点を 1 つも特定しない値
+// （"*" や "https:"）が入っていればエラーです。ここからキーワードが入ると、用意していない
 // 「インラインスクリプトの許可」が設定の形を変えずに通ってしまいます。
+// ContentSecurityPolicy は最後の手段として呼び出し側の責任に置いているので、検査しません。
 //
 // ヘッダーの値はリクエストごとに変わらないため、組み立ては 1 度だけ行います。
 func New(cfg Config) (func(http.Handler) http.Handler, error) {
@@ -124,8 +122,7 @@ func New(cfg Config) (func(http.Handler) http.Handler, error) {
 	}, nil
 }
 
-// validate は *Sources の各要素を検査します。ContentSecurityPolicy は最後の手段として
-// 呼び出し側の責任に置いているので、ここでは見ません。
+// validate は *Sources の各要素を検査します。
 func (c Config) validate() error {
 	lists := []struct {
 		field   string
@@ -178,11 +175,9 @@ var (
 func (c Config) headers() map[string]string {
 	values := map[string]string{
 		"Content-Security-Policy": c.contentSecurityPolicy(),
-		// MIME スニッフィングを止めます。署名付き URL へ 302 する経路があるため、
-		// 取り違えが起きたときの被害を型で抑えます。
-		"X-Content-Type-Options": "nosniff",
-		"Referrer-Policy":        orDefault(c.ReferrerPolicy, DefaultReferrerPolicy),
-		"Permissions-Policy":     orDefault(c.PermissionsPolicy, DefaultPermissionsPolicy),
+		"X-Content-Type-Options":  "nosniff",
+		"Referrer-Policy":         orDefault(c.ReferrerPolicy, DefaultReferrerPolicy),
+		"Permissions-Policy":      orDefault(c.PermissionsPolicy, DefaultPermissionsPolicy),
 	}
 
 	if maxAge := c.hstsMaxAge(); maxAge > 0 {

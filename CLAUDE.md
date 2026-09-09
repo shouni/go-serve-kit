@@ -126,6 +126,12 @@ Each package is imported on its own; nothing here imports anything else here.
   `serverrole` is the exception and tests in-package; prefer exporting something properly over moving
   another package in.
 - Doc comments and package comments in this repo are Japanese, matching the sibling apps that consume it.
-  Keep new comments in the same language and register. Error text is mixed today — `staticfiles` uses
-  English with a `staticfiles:` prefix, `serverrole` is Japanese; new sentinels should follow the English
-  `package: detail` form.
+  Keep new comments in the same language and register. Doc comments state the rule and at most a
+  one-sentence reason in the kit's own terms; provenance (which app needed it, what broke before) lives
+  here, not in godoc — the kit is consumed outside GCP, so comments must not reason in Cloud Run / GCS terms.
+- Error text is mixed today — `staticfiles` and `secureheaders` use English with a `package:` prefix,
+  `serverrole` is Japanese; new sentinels should follow the English `package: detail` form.
+- Each package has an `example_test.go` with `Output:`-checked `Example` functions. The README keeps only
+  the first end-to-end example (per the library README convention in `public-docs`); branch cases
+  (`Error` vs `ErrorJSON`, `UnmarshalText` binding, `DisableETag`, rejected `*Sources`) belong in the
+  Examples, so add there before trimming anything from the README.

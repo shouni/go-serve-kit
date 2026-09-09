@@ -50,7 +50,7 @@ func TestDefaults(t *testing.T) {
 	}
 }
 
-// TestMatchesCurrentAppPolicies は、5 つの兄弟アプリが今出している CSP を
+// TestMatchesCurrentAppPolicies は、利用側のアプリが出している CSP を
 // この組み立てで再現できることを確認します。
 //
 // adk-review と ap-story は media-src を書いていませんが、default-src が 'self'
@@ -72,19 +72,19 @@ func TestMatchesCurrentAppPolicies(t *testing.T) {
 			wantMedi: "media-src 'self'",
 		},
 		{
-			app:      "ap-comp / ap-mv（画像も音声も GCS）",
+			app:      "ap-mv（画像も音声も外部ストレージ）",
 			cfg:      secureheaders.Config{ImageSources: []string{gcs}, MediaSources: []string{gcs}},
 			wantImg:  "img-src 'self' data: " + gcs,
 			wantMedi: "media-src 'self' " + gcs,
 		},
 		{
-			app:      "ap-story（画像だけ GCS）",
+			app:      "ap-story（画像だけ外部ストレージ）",
 			cfg:      secureheaders.Config{ImageSources: []string{gcs}},
 			wantImg:  "img-src 'self' data: " + gcs,
 			wantMedi: "media-src 'self'",
 		},
 		{
-			app:      "ap-voice（音声だけ GCS）",
+			app:      "ap-voice（音声だけ外部ストレージ）",
 			cfg:      secureheaders.Config{MediaSources: []string{gcs}},
 			wantImg:  "img-src 'self' data:",
 			wantMedi: "media-src 'self' " + gcs,
