@@ -262,6 +262,9 @@ func TestSourcesRejectKeywordsAndWildcards(t *testing.T) {
 	bad := []string{
 		"'unsafe-inline'", "'UNSAFE-EVAL'", "'strict-dynamic'", " 'self' ",
 		"*", "https:", "HTTPS://*", "wss:", "http://*",
+		// 1 要素に複数の式やディレクティブを詰めて、上の検査を迂回する形。
+		"https://cdn.example 'unsafe-inline'", "https://cdn.example\t'unsafe-eval'",
+		"https://cdn.example *", "x; object-src *", "x;frame-ancestors *", "x, script-src *",
 	}
 	for _, source := range bad {
 		for name, cfg := range map[string]secureheaders.Config{

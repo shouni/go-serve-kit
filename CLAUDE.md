@@ -81,6 +81,10 @@ Each package is imported on its own; nothing here imports anything else here.
   which app needs it (Bootstrap's collapse/tab).
 - **`*Sources` reject CSP keywords (`'...'`) and any-origin values (`*`, `https:`, `https://*`).**
   Without that check the missing knob above was bypassable by `ScriptSources: {"'unsafe-inline'"}`.
+  An element is exactly one source expression: whitespace, `;` and `,` inside one are rejected too,
+  because values are concatenated as-is — `"https://cdn.example 'unsafe-inline'"` smuggles a second,
+  unchecked expression, and `"x; object-src *"` opens a directive that has no knob at all (the first
+  occurrence of a directive wins).
   `New` returns the error; `Middleware` panics on it, because config is fixed at startup and failing
   there beats serving a loosened CSP. `ContentSecurityPolicy` is deliberately not validated.
 - **`object-src` / `base-uri` / `frame-ancestors` / `form-action` have no knobs.** There is no reason to
