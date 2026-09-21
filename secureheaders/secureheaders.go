@@ -102,6 +102,7 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 // *Sources に CSP のキーワード（'unsafe-inline' 等）や、起点を 1 つも特定しない値
 // （"*" や "https:"）が入っていればエラーです。ここからキーワードが入ると、用意していない
 // 「インラインスクリプトの許可」が設定の形を変えずに通ってしまいます。
+// 1 要素は source 式 1 つで、空白・";"・"," を含む要素も同じ理由でエラーです。
 // ContentSecurityPolicy は最後の手段として呼び出し側の責任に置いているので、検査しません。
 //
 // ヘッダーの値はリクエストごとに変わらないため、組み立ては 1 度だけ行います。
@@ -153,11 +154,14 @@ var anyOriginSources = map[string]bool{
 }
 
 // validateSource は 1 つの source 式を検査します。空白のみは sourceList が落とすので通します。
+// 前後の空白も sourceList が落とすので、検査は落とした後の値に対して行います。
 func validateSource(source string) error {
 	trimmed := strings.ToLower(strings.TrimSpace(source))
 	switch {
 	case trimmed == "":
 		return nil
+	case strings.ContainsAny(trimmed, sourceSeparators):
+		return errMultipleSources
 	case strings.HasPrefix(trimmed, "'"):
 		return errKeywordSource
 	case anyOriginSources[trimmed]:
@@ -166,9 +170,19 @@ func validateSource(source string) error {
 	return nil
 }
 
+// sourceSeparators は、1 つの source 式の中に現れてはならない区切り文字です。
+//
+// 値はそのまま CSP へ連結するので、空白が入ると 2 つ目以降の式が検査を受けずに
+// 並びます（"https://cdn.example 'unsafe-inline'"）。";" はディレクティブの区切りで、
+// 同名のディレクティブは最初の出現が勝つため、"x; object-src *" と書けば調整点を
+// 用意していない object-src や frame-ancestors まで緩められます。"," はヘッダーを
+// 複数のポリシーに分けます。
+const sourceSeparators = " \t\r\n\f\v;,"
+
 var (
 	errKeywordSource   = errors.New("CSP keywords are not accepted in *Sources; use AllowInlineStyle for inline style")
 	errAnyOriginSource = errors.New("source allows any origin, which disables the directive")
+	errMultipleSources = errors.New("source contains whitespace, ';' or ','; pass one source expression per element")
 )
 
 // headers は、実際に付ける名前と値の対応を組み立てます。
