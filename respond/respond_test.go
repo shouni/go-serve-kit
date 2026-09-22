@@ -335,3 +335,61 @@ func TestJSONSkipsBodyForBodilessStatus(t *testing.T) {
 		}
 	}
 }
+
+// TestServerErrorHidesCauseAndLogsIt は、5xx の原因が本文ではなくログに出ることを
+// 検証します。内部エラーの文面には接続先やパスが含まれ、本文に出すと利用者に見えます。
+func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
+	var buf bytes.Buffer
+	restore := slog.Default()
+	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
+	t.Cleanup(func() { slog.SetDefault(restore) })
+
+	cause := errors.New("dial tcp 10.0.0.5:443: connection refused")
+
+	t.Run("Error は Accept に応じて形を変える", func(t *testing.T) {
+		buf.Reset()
+		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
+		req.Header.Set("Accept", "application/json")
+		rec := httptest.NewRecorder()
+
+		respond.ServerError(rec, req, http.StatusBadGateway, cause, "backend unreachable", "job_id", "j1")
+
+		if rec.Code != http.StatusBadGateway {
+			t.Errorf("status = %d, want 502", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "10.0.0.5") {
+			t.Errorf("body leaks the cause: %s", rec.Body.String())
+		}
+		if !strings.Contains(rec.Body.String(), http.StatusText(http.StatusBadGateway)) {
+			t.Errorf("body = %q, want the status text", rec.Body.String())
+		}
+		for _, want := range []string{"backend unreachable", "10.0.0.5", `"job_id":"j1"`, `"status":502`} {
+			if !strings.Contains(buf.String(), want) {
+				t.Errorf("log lacks %q: %s", want, buf.String())
+			}
+		}
+	})
+
+	t.Run("ServerErrorJSON は常に JSON", func(t *testing.T) {
+		buf.Reset()
+		rec := httptest.NewRecorder()
+
+		respond.ServerErrorJSON(rec, httptest.NewRequest(http.MethodGet, "/jobs", nil), http.StatusInternalServerError, cause, "boom")
+
+		var body map[string]string
+		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil || body["error"] != http.StatusText(http.StatusInternalServerError) {
+			t.Errorf("body = %q, want {\"error\":\"Internal Server Error\"}", rec.Body.String())
+		}
+		if !strings.Contains(buf.String(), "connection refused") {
+			t.Errorf("cause not logged: %s", buf.String())
+		}
+	})
+
+	t.Run("nil のリクエストでも落ちない", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		respond.ServerError(rec, nil, http.StatusInternalServerError, cause, "boom")
+		if rec.Code != http.StatusInternalServerError {
+			t.Errorf("status = %d, want 500", rec.Code)
+		}
+	})
+}

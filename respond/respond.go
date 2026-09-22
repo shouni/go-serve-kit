@@ -114,6 +114,34 @@ func ErrorJSON(w http.ResponseWriter, r *http.Request, status int, message strin
 	JSON(w, r, status, errorBody{Error: message})
 }
 
+// ServerError は、5xx の応答を「原因はログに、本文は定型文で」の形で返します。
+//
+// 内部エラーの文面（接続先のホスト名、GCS のパス、SDK のメッセージ）はそのまま
+// 本文に出すと利用者に見えます。URL 規約 2.6 が「5xx の詳細はログに出し、本文に
+// 出さない」と定めているのはそのためで、これを各ハンドラーが「slog → 定型文」の
+// 2 行で書くと、定型文がサービスごとに割れ（"internal server error" と
+// StatusText と日本語）、err.Error() をそのまま渡す経路も混じります。
+//
+// 記録は r のコンテキストで行うので、slogctx で ctx に載せた job_id などが付きます。
+// 本文は Accept に応じて JSON か text/plain です（Error と同じ）。
+// 4xx には使わないでください。4xx の本文は利用者への説明で、隠すものではありません。
+func ServerError(w http.ResponseWriter, r *http.Request, status int, err error, msg string, attrs ...any) {
+	logServerError(r, status, err, msg, attrs)
+	Error(w, r, status, http.StatusText(status))
+}
+
+// ServerErrorJSON は ServerError の、常に JSON で返す版です（ErrorJSON と同じ関係）。
+func ServerErrorJSON(w http.ResponseWriter, r *http.Request, status int, err error, msg string, attrs ...any) {
+	logServerError(r, status, err, msg, attrs)
+	ErrorJSON(w, r, status, http.StatusText(status))
+}
+
+// logServerError は、5xx の原因をリクエストのコンテキストで記録します。
+func logServerError(r *http.Request, status int, err error, msg string, attrs []any) {
+	attrs = append(attrs, "status", status, "error", err)
+	slog.ErrorContext(requestContext(r), msg, attrs...)
+}
+
 // bodyAllowed は、status の応答が本文を持てるかを返します。
 // 規則は net/http が Write を拒む条件（1xx / 204 / 304）と同じです。
 func bodyAllowed(status int) bool {

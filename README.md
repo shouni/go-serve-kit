@@ -20,7 +20,7 @@
 パッケージは独立しており、必要なものだけを import できます。ここに挙げるのは
 **採否を左右する前提**だけです。API の詳細と個々の判断理由は各パッケージの godoc にあります。
 
-* **`respond`**: 応答の書き出し（`JSON` / `Error` / `ErrorJSON`）と、`Accept` による表現の選択（`WantsJSON`）
+* **`respond`**: 応答の書き出し（`JSON` / `Error` / `ErrorJSON`、5xx 用の `ServerError` / `ServerErrorJSON`）と、`Accept` による表現の選択（`WantsJSON`）
   * **判定は `application/json` の部分一致で、q 値は解釈しません。** `*/*`（curl や多くの HTTP
     クライアントの既定）は HTML 側に倒れます。JSON を期待する呼び出し元には、明示的な `Accept` を送らせてください。
   * `WantsJSON` は判定と同時に `Vary: Accept` を立てるので、`ResponseWriter` を要求します。
