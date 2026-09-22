@@ -38,7 +38,7 @@ stops being true.
 
 Each package is imported on its own; nothing here imports anything else here.
 
-- **`respond`** — writing the body (`JSON` / `Error` / `ErrorJSON`) *and* choosing the representation
+- **`respond`** — writing the body (`JSON` / `Error` / `ErrorJSON` / `ServerError` / `ServerErrorJSON`) *and* choosing the representation
   (`WantsJSON`). The two live together on purpose: sharing only one of them let the other drift per app —
   the `Content-Type` (`application/json` vs `application/json; charset=utf-8`) and the handling of an
   encode failure (logged with context / without / swallowed) had each split across sibling apps.
@@ -61,6 +61,13 @@ Each package is imported on its own; nothing here imports anything else here.
 - **`Error` vs `ErrorJSON` is chosen by the route's nature, not by taste.** A route shared by a screen and
   an API uses `Error`; a JSON-only route uses `ErrorJSON`, so callers do not have to read the body one way
   on success and another on failure.
+- **5xx goes through `ServerError` / `ServerErrorJSON`, which log the cause and answer with
+  `http.StatusText`.** The URL convention (2.6) says a 5xx body carries no detail, but with only
+  `Error` available every handler wrote the "slog then canned text" pair by hand: 29 sites across the
+  apps, with the canned text split four ways, and five sites that passed `err.Error()` straight into the
+  body — connection targets and storage paths included. The helper logs on the request context so
+  `slogctx` attributes (job_id) ride along. Do not use it for 4xx; a 4xx body is the explanation the
+  caller is owed, not something to hide.
 - **`JSON` marshals into a buffer before writing.** Streaming a value that can fail mid-encode (`chan`,
   a cycle, a failing `MarshalJSON`) delivers truncated JSON under a 200 that is already committed. On
   failure it answers 500 with `{"error": ...}`.
