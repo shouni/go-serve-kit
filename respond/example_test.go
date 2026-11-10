@@ -8,10 +8,10 @@ import (
 	"github.com/shouni/go-serve-kit/respond"
 )
 
-// 画面と API が同じ URL を共有するルートです。表現だけを Accept で選びます。
+// A route whose URL is shared by a screen and an API. Only the representation is chosen by Accept.
 func ExampleWantsJSON() {
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if respond.WantsJSON(w, r) { // Vary: Accept もここで立ちます
+		if respond.WantsJSON(w, r) { // Vary: Accept is set here too
 			respond.JSON(w, r, http.StatusOK, map[string]string{"title": "first"})
 			return
 		}
@@ -30,7 +30,7 @@ func ExampleWantsJSON() {
 	// text/html -> text/html; charset=utf-8 / Vary: Accept / <h1>first</h1>
 }
 
-// 画面と API が同じ URL を共有するルートでは Error を使います。
+// Use Error on routes whose URL is shared by a screen and an API.
 func ExampleError() {
 	for _, accept := range []string{"application/json", "text/html"} {
 		req := httptest.NewRequest(http.MethodGet, "/comics", nil)
@@ -44,10 +44,10 @@ func ExampleError() {
 	// text/html -> 404 not found
 }
 
-// JSON しか返さないルートでは ErrorJSON を使います。Accept を送らない呼び出し元にも
-// 成功時と同じ形でエラーが返ります。
+// Use ErrorJSON on routes that return only JSON. Callers that send no Accept also get the
+// error in the same shape as on success.
 func ExampleErrorJSON() {
-	req := httptest.NewRequest(http.MethodPost, "/comics", nil) // Accept なし
+	req := httptest.NewRequest(http.MethodPost, "/comics", nil) // no Accept
 	rec := httptest.NewRecorder()
 	respond.ErrorJSON(rec, req, http.StatusBadRequest, "invalid request")
 	fmt.Printf("%d %s", rec.Code, rec.Body.String())

@@ -33,7 +33,7 @@ func TestWantsJSON(t *testing.T) {
 			if got := respond.WantsJSON(rec, req); got != tt.want {
 				t.Errorf("WantsJSON() = %v, want %v", got, tt.want)
 			}
-			// 判定の結果によらず Vary は必ず立つ。
+			// Vary is always set, whatever the decision.
 			if got := rec.Header().Get("Vary"); got != "Accept" {
 				t.Errorf("Vary = %q, want %q", got, "Accept")
 			}
@@ -41,8 +41,8 @@ func TestWantsJSON(t *testing.T) {
 	}
 }
 
-// 判定と Vary を 1 つの関数にまとめている意図の確認。
-// w を渡さずに判定だけを行う経路でも panic しないこと。
+// Checks the intent behind keeping the decision and Vary in one function:
+// a path that only decides, without passing w, must not panic.
 func TestWantsJSON_NilArgs(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	req.Header.Set("Accept", "application/json")
@@ -66,7 +66,7 @@ func TestAddVaryAccept(t *testing.T) {
 		}
 	})
 
-	// 他のヘッダーで既に Vary が立っている場合は、Accept を足す。
+	// When Vary is already set for another header, Accept is added.
 	t.Run("既存の Vary を壊さないこと", func(t *testing.T) {
 		h := http.Header{}
 		h.Add("Vary", "Origin")
@@ -78,14 +78,14 @@ func TestAddVaryAccept(t *testing.T) {
 		}
 	})
 
-	// カンマ区切りで既に含まれている場合は追加しない。
+	// When already listed in a comma-separated value, it is not added.
 	t.Run("カンマ区切りの既存値も検出すること", func(t *testing.T) {
 		h := http.Header{}
 		h.Add("Vary", "Origin, accept")
 		respond.AddVaryAccept(h)
 
 		if got := h.Values("Vary"); len(got) != 1 {
-			t.Errorf("Vary = %v, want 追加されないこと", got)
+			t.Errorf("Vary = %v, want Accept not added again", got)
 		}
 	})
 

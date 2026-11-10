@@ -12,7 +12,7 @@ import (
 	"github.com/shouni/go-serve-kit/staticfiles"
 )
 
-// testFS は、アプリの assets/static と同じ形（自前の CSS と、バージョン付きの vendor）です。
+// testFS has the same shape as an app's assets/static (own CSS plus a versioned vendor).
 func testFS() fstest.MapFS {
 	return fstest.MapFS{
 		"static/css/app.css":                          {Data: []byte("body{}")},
@@ -36,8 +36,8 @@ func get(h http.Handler, method, target string) *httptest.ResponseRecorder {
 	return rec
 }
 
-// TestServesWithCacheControl は、自前のファイルは短命、vendor 配下は不変として配信されることを
-// 確認します。属性は落ちても機能が動くので気付けません。
+// TestServesWithCacheControl checks that own files are served short-lived and files under
+// vendor as immutable. Losing the header would go unnoticed, since everything still works.
 func TestServesWithCacheControl(t *testing.T) {
 	t.Parallel()
 
@@ -65,8 +65,9 @@ func TestServesWithCacheControl(t *testing.T) {
 	}
 }
 
-// TestNotFoundCarriesNoCacheControl は、無いファイルの 404 に Cache-Control が付かないことを
-// 確認します。1 年の immutable を 404 に付けると、後から置いたファイルがその期間届きません。
+// TestNotFoundCarriesNoCacheControl checks that a 404 for a missing file has no
+// Cache-Control. A year of immutable on a 404 would keep a file added later from arriving
+// for that whole period.
 func TestNotFoundCarriesNoCacheControl(t *testing.T) {
 	t.Parallel()
 
@@ -75,7 +76,7 @@ func TestNotFoundCarriesNoCacheControl(t *testing.T) {
 	for _, target := range []string{
 		"/static/css/missing.css",
 		"/static/vendor/bootstrap-9.9.9/bootstrap.css",
-		"/elsewhere/app.css", // Prefix の外
+		"/elsewhere/app.css", // outside Prefix
 	} {
 		rec := get(h, http.MethodGet, target)
 		if rec.Code != http.StatusNotFound {
@@ -87,8 +88,8 @@ func TestNotFoundCarriesNoCacheControl(t *testing.T) {
 	}
 }
 
-// TestDirectoriesAreNotListed は、ディレクトリの一覧を出さないことを確認します。
-// http.FileServer は既定で出します。
+// TestDirectoriesAreNotListed checks that directories are not listed.
+// http.FileServer lists them by default.
 func TestDirectoriesAreNotListed(t *testing.T) {
 	t.Parallel()
 
@@ -105,7 +106,7 @@ func TestDirectoriesAreNotListed(t *testing.T) {
 	}
 }
 
-// TestDoesNotEscapeTheRoot は、".." で Dir の外へ出られないことを確認します。
+// TestDoesNotEscapeTheRoot checks that ".." cannot escape Dir.
 func TestDoesNotEscapeTheRoot(t *testing.T) {
 	t.Parallel()
 
@@ -119,7 +120,7 @@ func TestDoesNotEscapeTheRoot(t *testing.T) {
 	}
 }
 
-// TestOnlyGetAndHead は、静的ファイルに GET / HEAD 以外を受けないことを確認します。
+// TestOnlyGetAndHead checks that static files accept nothing but GET / HEAD.
 func TestOnlyGetAndHead(t *testing.T) {
 	t.Parallel()
 
@@ -134,7 +135,7 @@ func TestOnlyGetAndHead(t *testing.T) {
 	}
 }
 
-// TestConfigOverrides は、Prefix / VendorDir / Cache-Control の差し替えが効くことを確認します。
+// TestConfigOverrides checks that overriding Prefix / VendorDir / Cache-Control takes effect.
 func TestConfigOverrides(t *testing.T) {
 	t.Parallel()
 
@@ -158,7 +159,7 @@ func TestConfigOverrides(t *testing.T) {
 	}
 }
 
-// TestNewRejectsBadConfig は、設定の欠けや形の誤りを構築時に止めることを確認します。
+// TestNewRejectsBadConfig checks that missing or malformed settings are stopped at construction.
 func TestNewRejectsBadConfig(t *testing.T) {
 	t.Parallel()
 
@@ -179,9 +180,9 @@ func TestNewRejectsBadConfig(t *testing.T) {
 	}
 }
 
-// TestETagEnablesConditionalRequests は、中身から作った ETag が付き、If-None-Match が
-// 一致すれば 304 で済むことを確認します。埋め込んだ FileServer は Last-Modified を出せないので、
-// これが無いと 5 分ごとに全体を取り直します。
+// TestETagEnablesConditionalRequests checks that an ETag made from the contents is attached
+// and that a matching If-None-Match gets a 304. An embedded FileServer cannot emit
+// Last-Modified, so without it the whole file is refetched every 5 minutes.
 func TestETagEnablesConditionalRequests(t *testing.T) {
 	t.Parallel()
 
@@ -207,12 +208,12 @@ func TestETagEnablesConditionalRequests(t *testing.T) {
 	if rec.Body.Len() != 0 {
 		t.Errorf("304 carries a body: %q", rec.Body.String())
 	}
-	// 304 にも Cache-Control を付けて、鮮度を延ばす。
+	// The 304 carries Cache-Control too, extending freshness.
 	if got := rec.Header().Get("Cache-Control"); got != staticfiles.DefaultOwnCacheControl {
 		t.Errorf("304 Cache-Control = %q, want %q", got, staticfiles.DefaultOwnCacheControl)
 	}
 
-	// 中身が変われば ETag も変わり、古い検証子では 200 で取り直す。
+	// Changed contents change the ETag, and a stale validator refetches with a 200.
 	changed := testFS()
 	changed["static/css/app.css"] = &fstest.MapFile{Data: []byte("body{margin:0}")}
 	rec = httptest.NewRecorder()
@@ -228,7 +229,7 @@ func TestETagEnablesConditionalRequests(t *testing.T) {
 	}
 }
 
-// TestDisableETag は、FS が起動後に変わる場合に ETag を止められることを確認します。
+// TestDisableETag checks that the ETag can be turned off when the FS changes after startup.
 func TestDisableETag(t *testing.T) {
 	t.Parallel()
 
@@ -243,8 +244,8 @@ func TestDisableETag(t *testing.T) {
 	}
 }
 
-// TestIndexHTMLIsNotRedirected は、index.html がディレクトリへの 301 にならないことを確認します。
-// http.FileServer は ".../index.html" を "./" へ転送し、そこで一覧を出そうとします。
+// TestIndexHTMLIsNotRedirected checks that index.html does not become a 301 to the directory.
+// http.FileServer redirects ".../index.html" to "./" and then tries to list it.
 func TestIndexHTMLIsNotRedirected(t *testing.T) {
 	t.Parallel()
 
@@ -267,8 +268,8 @@ func TestIndexHTMLIsNotRedirected(t *testing.T) {
 	}
 }
 
-// unreadableFS は、特定のファイルだけ開けない FS です。ETag の計算が読めない
-// ファイルに当たったとき、黙って ETag 無しで配信せず、起動で止まることを見るためです。
+// unreadableFS is an FS where one specific file cannot be opened. It checks that when ETag
+// computation hits an unreadable file, startup stops instead of silently serving without ETags.
 type unreadableFS struct {
 	fs.FS
 	name string
@@ -281,8 +282,8 @@ func (u unreadableFS) Open(name string) (fs.File, error) {
 	return u.FS.Open(name)
 }
 
-// TestNewFailsWhenETagCannotBeComputed は、ETag を計算できないファイルがあれば New が
-// エラーを返し、DisableETag なら読まずに構築できることを確認します。
+// TestNewFailsWhenETagCannotBeComputed checks that New returns an error when a file's ETag
+// cannot be computed, and that with DisableETag it builds without reading the files.
 func TestNewFailsWhenETagCannotBeComputed(t *testing.T) {
 	t.Parallel()
 

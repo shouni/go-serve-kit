@@ -8,14 +8,14 @@ import (
 	"github.com/shouni/go-serve-kit/secureheaders"
 )
 
-// 外部オリジンを足すのは、実際に越境するディレクティブだけです。
+// Add external origins only to the directives that actually cross origins.
 func ExampleMiddleware() {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusOK) })
 
 	handler := secureheaders.Middleware(secureheaders.Config{
-		MediaSources:     []string{"https://media.example.com"}, // 署名付き URL へ 302 する場合
-		AllowInlineStyle: true,                                  // Bootstrap の collapse / tab を使う場合
+		MediaSources:     []string{"https://media.example.com"}, // when redirecting (302) to signed URLs
+		AllowInlineStyle: true,                                  // when using Bootstrap's collapse / tab
 	})(mux)
 
 	rec := httptest.NewRecorder()
@@ -27,7 +27,7 @@ func ExampleMiddleware() {
 	// max-age=31536000; includeSubDomains
 }
 
-// *Sources にキーワードを渡すと New はエラーを返します（Middleware は panic します）。
+// Passing a keyword to *Sources makes New return an error (Middleware panics).
 func ExampleNew() {
 	_, err := secureheaders.New(secureheaders.Config{
 		ScriptSources: []string{"'unsafe-inline'"},

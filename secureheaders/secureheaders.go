@@ -1,9 +1,9 @@
-// Package secureheaders は、ブラウザ向けの防御的なレスポンスヘッダーを
-// 全応答へ付けるミドルウェアを提供します。
+// Package secureheaders provides middleware that adds defensive browser response headers
+// to every response.
 //
-// 既定は「外部オリジンを 1 つも許可せず、インラインスタイルも許さない」です。
-// 第三者製の JS/CSS を CDN からではなく自前配信していることを前提にしており、
-// 足りない分は Config の *Sources と AllowInlineStyle で開けます。
+// The default allows no external origin and no inline style. It assumes third-party JS/CSS
+// is self-hosted rather than pulled from a CDN; anything more is opened through Config's
+// *Sources and AllowInlineStyle.
 //
 //	r.Use(secureheaders.Middleware(secureheaders.Config{
 //	    MediaSources: []string{"https://storage.googleapis.com"},
@@ -20,75 +20,75 @@ import (
 )
 
 const (
-	// DefaultReferrerPolicy は same-origin です。既定の CSP が外部オリジンへの参照を
-	// 1 つも許さない以上、Referer を外へ出す理由もありません。
+	// DefaultReferrerPolicy is same-origin. Since the default CSP allows no reference to an
+	// external origin, there is no reason to send the Referer outside either.
 	DefaultReferrerPolicy = "same-origin"
 
-	// DefaultPermissionsPolicy は、ブラウザ向けサービスがまず使わない機能だけを塞ぎます。
-	// autoplay は入れません。音声や動画を続けて再生する画面を妨げるためです。
+	// DefaultPermissionsPolicy blocks only features a browser-facing service almost never
+	// uses. autoplay is left out because it would get in the way of screens that play audio
+	// or video back to back.
 	DefaultPermissionsPolicy = "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
 
-	// DefaultHSTSMaxAge は 1 年です。preload は付けません（撤回にブラウザベンダーへの
-	// 申請が要るうえ、得るものが少ないため）。
+	// DefaultHSTSMaxAge is one year. preload is not set (withdrawing it requires a request
+	// to the browser vendors, and there is little to gain).
 	DefaultHSTSMaxAge = 365 * 24 * time.Hour
 )
 
-// Config は付与するヘッダーの設定です。すべて任意で、ゼロ値は既定へ倒れます。
+// Config configures the headers that are added. Every field is optional, and zero values
+// fall back to the defaults.
 type Config struct {
-	// ImageSources / MediaSources は、CSP の img-src / media-src に足す
-	// 外部オリジンです。
+	// ImageSources / MediaSources are external origins added to the CSP's img-src /
+	// media-src.
 	//
-	// 同一オリジンのエンドポイントから外部ストレージの署名付き URL へ 302 する場合も、
-	// リダイレクト先をここに足してください。リダイレクト先を CSP がどう扱うかは
-	// ブラウザ実装に幅があるため、明示して依存しないようにします。
+	// When a same-origin endpoint redirects (302) to a signed URL on external storage, add
+	// the redirect target here too. How CSP treats redirect targets varies across browser
+	// implementations, so state it explicitly rather than depending on it.
 	ImageSources []string
 	MediaSources []string
 
-	// ScriptSources / StyleSources / ConnectSources は、それぞれ script-src /
-	// style-src / connect-src に足す外部オリジンです。
+	// ScriptSources / StyleSources / ConnectSources are external origins added to
+	// script-src / style-src / connect-src respectively.
 	//
-	// *Sources に置けるのはオリジン（とスキーム）だけです。'unsafe-inline' 等の
-	// キーワードや、"*" / "https:" のように起点を特定しない値は New が拒みます。
+	// *Sources accept origins (and schemes) only. New rejects keywords such as
+	// 'unsafe-inline' and values that do not pin down an origin, such as "*" / "https:".
 	//
-	// CDN を script-src に載せるのは避けてください。jsDelivr のようなホストは
-	// npm の全パッケージを配信しているため、「任意の npm パッケージの読み込みを
-	// 許可する」に等しくなります（既知の CSP バイパス・ガジェットを持ち込めます）。
+	// Avoid putting a CDN in script-src. Hosts like jsDelivr serve every npm package, so it
+	// amounts to "allow loading any npm package" (and lets in the known CSP-bypass
+	// gadgets).
 	ScriptSources  []string
 	StyleSources   []string
 	ConnectSources []string
 
-	// AllowInlineStyle は style-src に 'unsafe-inline' を足します。
+	// AllowInlineStyle adds 'unsafe-inline' to style-src.
 	//
-	// 既定は false（付けない）です。インラインスタイルを当てる JS を積んでいる
-	// 場合にだけ true にしてください（Bootstrap の collapse / tab が該当します）。
-	// 既定を false にしてあるのは、必要としないアプリまで巻き込まないためで、
-	// どのアプリがこれを要求しているかが設定に現れます。
+	// The default is false (not added). Set it to true only when you ship JS that applies
+	// inline styles (Bootstrap's collapse / tab do). It defaults to false so that apps that
+	// do not need it are not dragged along, and so the config shows which app requires it.
 	//
-	// script-src に対応する項目は用意していません。インラインスクリプトを
-	// 許すと CSP が防いでいるものの大半が無くなるためです。
+	// There is no script-src counterpart. Allowing inline script removes most of what CSP
+	// protects against.
 	AllowInlineStyle bool
 
-	// ContentSecurityPolicy は、組み立てを使わず CSP 全体を指定します。
-	// 空なら他の項目から組み立てます。
+	// ContentSecurityPolicy specifies the whole CSP instead of having it assembled.
+	// If empty, the CSP is assembled from the other fields.
 	//
-	// 最後の手段です。これを渡すと object-src 'none' や base-uri 'none' まで
-	// 呼び出し側の責任になります。1 つのディレクティブを緩めたいだけなら、
-	// 上の *Sources を使ってください。
+	// It is the last resort. Passing it makes even object-src 'none' and base-uri 'none'
+	// the caller's responsibility. To loosen a single directive, use the *Sources above.
 	ContentSecurityPolicy string
 
-	// ReferrerPolicy / PermissionsPolicy は空なら既定値です。
+	// ReferrerPolicy / PermissionsPolicy use the defaults when empty.
 	ReferrerPolicy    string
 	PermissionsPolicy string
 
-	// HSTSMaxAge は Strict-Transport-Security の max-age です。
-	// 0 なら既定（1 年）、負値なら HSTS を付けません。
+	// HSTSMaxAge is the max-age of Strict-Transport-Security.
+	// Zero means the default (one year); a negative value omits HSTS.
 	HSTSMaxAge time.Duration
 }
 
-// Middleware は New と同じミドルウェアを返し、設定が不正なら panic します。
+// Middleware returns the same middleware as New and panics if the config is invalid.
 //
-// 設定は起動時に固定される値なので、緩んだ CSP を出し続けるより起動で落とします。
-// エラーとして受け取りたい場合は New を使ってください。
+// The config is fixed at startup, so failing there beats serving a loosened CSP.
+// Use New to receive the error instead.
 func Middleware(cfg Config) func(http.Handler) http.Handler {
 	mw, err := New(cfg)
 	if err != nil {
@@ -97,15 +97,16 @@ func Middleware(cfg Config) func(http.Handler) http.Handler {
 	return mw
 }
 
-// New は、設定に基づく防御的ヘッダーを全応答へ付けるミドルウェアを返します。
+// New returns middleware that adds the configured defensive headers to every response.
 //
-// *Sources に CSP のキーワード（'unsafe-inline' 等）や、起点を 1 つも特定しない値
-// （"*" や "https:"）が入っていればエラーです。ここからキーワードが入ると、用意していない
-// 「インラインスクリプトの許可」が設定の形を変えずに通ってしまいます。
-// 1 要素は source 式 1 つで、空白・";"・"," を含む要素も同じ理由でエラーです。
-// ContentSecurityPolicy は最後の手段として呼び出し側の責任に置いているので、検査しません。
+// It returns an error if *Sources contain a CSP keyword ('unsafe-inline' and the like) or a
+// value that pins down no origin at all ("*" or "https:"). If a keyword could get in here,
+// "allow inline script", which is deliberately not offered, would pass without changing the
+// shape of the config. Each element is one source expression, and for the same reason an
+// element containing whitespace, ";" or "," is an error too. ContentSecurityPolicy is not
+// checked, since as the last resort it is left to the caller's responsibility.
 //
-// ヘッダーの値はリクエストごとに変わらないため、組み立ては 1 度だけ行います。
+// Header values do not change per request, so they are assembled only once.
 func New(cfg Config) (func(http.Handler) http.Handler, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -123,7 +124,7 @@ func New(cfg Config) (func(http.Handler) http.Handler, error) {
 	}, nil
 }
 
-// validate は *Sources の各要素を検査します。
+// validate checks each element of the *Sources.
 func (c Config) validate() error {
 	lists := []struct {
 		field   string
@@ -145,16 +146,17 @@ func (c Config) validate() error {
 	return nil
 }
 
-// anyOriginSources は、ネットワーク上のあらゆる起点を許す source 式です。
-// これを足すと、そのディレクティブは無いのと同じになります。
+// anyOriginSources are source expressions that allow every origin on the network.
+// Adding one makes the directive as good as absent.
 var anyOriginSources = map[string]bool{
 	"*":     true,
 	"http:": true, "https:": true, "ws:": true, "wss:": true,
 	"http://*": true, "https://*": true, "ws://*": true, "wss://*": true,
 }
 
-// validateSource は 1 つの source 式を検査します。空白のみは sourceList が落とすので通します。
-// 前後の空白も sourceList が落とすので、検査は落とした後の値に対して行います。
+// validateSource checks one source expression. A whitespace-only value passes, because
+// sourceList drops it. sourceList also trims surrounding whitespace, so the check runs on
+// the trimmed value.
 func validateSource(source string) error {
 	trimmed := strings.ToLower(strings.TrimSpace(source))
 	switch {
@@ -170,13 +172,13 @@ func validateSource(source string) error {
 	return nil
 }
 
-// sourceSeparators は、1 つの source 式の中に現れてはならない区切り文字です。
+// sourceSeparators are separators that must not appear inside one source expression.
 //
-// 値はそのまま CSP へ連結するので、空白が入ると 2 つ目以降の式が検査を受けずに
-// 並びます（"https://cdn.example 'unsafe-inline'"）。";" はディレクティブの区切りで、
-// 同名のディレクティブは最初の出現が勝つため、"x; object-src *" と書けば調整点を
-// 用意していない object-src や frame-ancestors まで緩められます。"," はヘッダーを
-// 複数のポリシーに分けます。
+// Values are concatenated into the CSP as is, so whitespace lets a second, unchecked
+// expression follow ("https://cdn.example 'unsafe-inline'"). ";" separates directives, and
+// since the first occurrence of a directive wins, writing "x; object-src *" could loosen
+// object-src or frame-ancestors, which have no knob at all. "," splits the header into
+// several policies.
 const sourceSeparators = " \t\r\n\f\v;,"
 
 var (
@@ -185,7 +187,7 @@ var (
 	errMultipleSources = errors.New("source contains whitespace, ';' or ','; pass one source expression per element")
 )
 
-// headers は、実際に付ける名前と値の対応を組み立てます。
+// headers builds the map of header names to the values actually set.
 func (c Config) headers() map[string]string {
 	values := map[string]string{
 		"Content-Security-Policy": c.contentSecurityPolicy(),
@@ -201,18 +203,18 @@ func (c Config) headers() map[string]string {
 	return values
 }
 
-// contentSecurityPolicy は CSP を組み立てます。
+// contentSecurityPolicy assembles the CSP.
 //
-// 既定はどのディレクティブも 'self' だけで、外部オリジンは Config で足した分しか
-// 入りません。object-src / base-uri / frame-ancestors / form-action は調整点を
-// 用意していません。緩める理由が無く、緩めた状態で気付かれないほうが高くつきます。
+// By default every directive is 'self' only, and external origins are only those added
+// through Config. object-src / base-uri / frame-ancestors / form-action have no knobs:
+// there is no reason to loosen them, and one loosened without anyone noticing costs more.
 func (c Config) contentSecurityPolicy() string {
 	if csp := strings.TrimSpace(c.ContentSecurityPolicy); csp != "" {
 		return csp
 	}
 
-	// 'unsafe-inline' は 'self' の直後に置きます（順序に意味はありませんが、
-	// 緩めている事実がディレクティブの先頭で読めるようにするためです）。
+	// 'unsafe-inline' goes right after 'self' (the order means nothing, but this way the
+	// fact that the directive is loosened reads at its start).
 	style := []string{"'self'"}
 	if c.AllowInlineStyle {
 		style = append(style, "'unsafe-inline'")
@@ -241,9 +243,9 @@ func (c Config) hstsMaxAge() time.Duration {
 	return c.HSTSMaxAge
 }
 
-// sourceList は "img-src 'self' data: https://..." の形へ組み立てます。
-// 空白のみの要素は落とします（環境変数から分割した値が混ざっても、
-// ディレクティブが壊れないようにするためです）。
+// sourceList assembles the form "img-src 'self' data: https://...".
+// Whitespace-only elements are dropped (so that values split from an environment variable
+// cannot break the directive).
 func sourceList(directive string, sources []string) string {
 	parts := make([]string, 0, len(sources)+1)
 	parts = append(parts, directive)

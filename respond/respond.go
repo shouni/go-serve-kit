@@ -1,16 +1,17 @@
-// Package respond は、HTTP 応答を返す側の定型を持ちます。応答本体の書き出し
-// （JSON / Error / ErrorJSON）と、相手に合わせて表現を選ぶ判定（WantsJSON）です。
+// Package respond holds the boilerplate of the side that writes HTTP responses: writing
+// the response body (JSON / Error / ErrorJSON) and deciding which representation fits the
+// caller (WantsJSON).
 //
-// 判定と書き出しを 1 つのパッケージに置くのは、片方だけを共有すると、もう片方が
-// アプリごとに割れるためです。実際に割れていたのは Content-Type
-// （"application/json" と "application/json; charset=utf-8"）と、エンコードに
-// 失敗したときの扱い（文脈付きで記録・文脈なしで記録・握り潰す）でした。
+// The decision and the writing live in one package because sharing only one of them lets
+// the other split per app. What had actually split was the Content-Type
+// ("application/json" vs "application/json; charset=utf-8") and the handling of an encode
+// failure (logged with context, logged without it, or swallowed).
 //
-// 表現を選ぶのは、1 つのリソースに 2 つの表現がある場合だけです。画面用と API 用に
-// ルートを分けると、同じ取得処理を 2 本持つことになり、片方だけ直したときに画面の
-// 表示と機械可読な結果が食い違います。ルートは 1 本に保ち、表現だけを Accept で
-// 選びます。ただし入力フォームのように JSON の対応物が無いものは別のリソースなので、
-// そちらは分けたままにします。
+// A representation is chosen only when one resource has two representations. Splitting a
+// route into a screen route and an API route means keeping two copies of the same fetch,
+// and fixing only one makes the screen and the machine-readable result disagree. Keep one
+// route and choose only the representation by Accept. Something with no JSON counterpart,
+// such as an input form, is a separate resource, so it stays a separate route.
 package respond
 
 import (
@@ -21,43 +22,45 @@ import (
 	"net/http"
 )
 
-// contentTypeJSON は JSON 応答に付ける Content-Type です。
+// contentTypeJSON is the Content-Type set on JSON responses.
 //
-// RFC 8259 が JSON を UTF-8 と定めている以上 charset の有無で解釈は変わりませんが、
-// 複数のバックエンドを呼ぶクライアントが両方の値を扱うことにならないよう、片方に固定します。
+// RFC 8259 defines JSON as UTF-8, so the charset parameter changes nothing about how it is
+// read, but it is fixed to one form so that a client calling several backends does not
+// have to handle both values.
 const contentTypeJSON = "application/json; charset=utf-8"
 
-// errorBody は、JSON を求めた呼び出し元へ返すエラー本文 {"error": "..."} です。
+// errorBody is the error body {"error": "..."} returned to callers that asked for JSON.
 type errorBody struct {
 	Error string `json:"error"`
 }
 
-// encodeFailureBody は、エンコードに失敗したときに返す本文です。
+// encodeFailureBody is the body returned when encoding fails.
 //
-// errorBody を通さずに用意してあるのは、エンコードが失敗した直後に同じ
-// エンコード経路をもう一度通らせないためです。
+// It is prepared without going through errorBody so that, right after an encode failure,
+// the same encoding path is not run a second time.
 var encodeFailureBody = []byte(`{"error":"Internal Server Error"}` + "\n")
 
-// JSON は payload を JSON として書き出します。
+// JSON writes payload as JSON.
 //
-// 先にバッファへ組み立ててから送ります。途中で失敗しうる値（chan、循環参照、
-// エラーを返す MarshalJSON）を w へ直接流すと、書けたところまでの壊れた JSON が
-// 状態コード 200 のまま届き、呼び出し側からは「成功したが本文が壊れている」
-// という最も紛らわしい形になります。組み立ててから送れば 500 に振り替えられます。
+// It builds the body in a buffer before sending. Streaming a value that can fail midway
+// (a chan, a cycle, a MarshalJSON that returns an error) straight into w delivers the
+// broken JSON written so far under a 200, which the caller sees in the most confusing form:
+// "it succeeded, but the body is broken". Building first lets the failure become a 500.
 //
-// 失敗時の本文も JSON です。JSON を返す約束のルートで失敗時だけ text/plain に
-// なると、呼び出し側は成功と失敗で本文の読み方を変えることになります
-// （ErrorJSON と同じ理由です）。
+// The failure body is JSON too. If a route that promises JSON switched to text/plain only
+// on failure, callers would have to read the body one way on success and another on
+// failure (the same reason as ErrorJSON).
 //
-// 記録先が slog.Default() なのは、既定ロガーを差し替えてあるアプリで、
-// severity やトレース相関がそのまま効くためです。
+// Failures are logged to slog.Default() so that, in apps that replaced the default logger,
+// severity and trace correlation apply as they are.
 //
-// Vary: Accept は立てません。表現を出し分けるかどうかを知っているのは
-// WantsJSON を呼んだ側で、JSON しか返さない経路に Vary は要らないためです。
+// It does not set Vary: Accept. Whether the representation varies is known to whoever
+// called WantsJSON, and a route that returns only JSON needs no Vary.
 //
-// 本文を持てない状態コード（1xx / 204 / 304）では payload を捨て、状態コードだけを
-// 返します。net/http はそれらへの書き込みを拒むため、書こうとすると応答は正しく
-// 届くのに「書き出しに失敗」が毎回記録され、本当の失敗が埋もれます。
+// For statuses that cannot carry a body (1xx / 204 / 304) the payload is discarded and only
+// the status is sent. net/http refuses writes on those statuses, so attempting one would log
+// a write failure every time even though the response arrives correctly, burying the real
+// failures.
 func JSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	if w == nil {
 		return
@@ -69,7 +72,7 @@ func JSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 
 	var buf bytes.Buffer
 	if err := json.NewEncoder(&buf).Encode(payload); err != nil {
-		slog.ErrorContext(requestContext(r), "respond: JSON 応答のエンコードに失敗しました",
+		slog.ErrorContext(requestContext(r), "respond: failed to encode JSON response",
 			"error", err, "status", status)
 		w.Header().Set("Content-Type", contentTypeJSON)
 		w.WriteHeader(http.StatusInternalServerError)
@@ -81,20 +84,19 @@ func JSON(w http.ResponseWriter, r *http.Request, status int, payload any) {
 	w.WriteHeader(status)
 
 	if _, err := w.Write(buf.Bytes()); err != nil {
-		slog.ErrorContext(requestContext(r), "respond: JSON 応答の書き出しに失敗しました",
+		slog.ErrorContext(requestContext(r), "respond: failed to write JSON response",
 			"error", err, "status", status)
 	}
 }
 
-// Error は、呼び出し元が JSON を求めていれば JSON で、そうでなければ
-// text/plain でエラーを返します。
+// Error returns an error as JSON if the caller asked for JSON, and as text/plain otherwise.
 //
-// 画面と API が同じ URL を共有するルート用です。JSON 固定にしないのは、画面側の
-// JS がエラー本文を resp.text() で読んでいるためで、逆に text/plain 固定にすると、
-// 通したエージェントが本文を構造化して読めません。どちらを返すかの判定は WantsJSON に
-// 委ねるので、Vary: Accept もそこで立ちます。
+// It is for routes whose URL is shared by a screen and an API. It is not fixed to JSON
+// because the screen's JS reads the error body with resp.text(); fixed to text/plain, an
+// agent going through the same route could not read the body as structured data. The
+// choice is delegated to WantsJSON, so Vary: Accept is set there as well.
 //
-// JSON しか返さないルートでは ErrorJSON を使ってください。
+// Use ErrorJSON on routes that return only JSON.
 func Error(w http.ResponseWriter, r *http.Request, status int, message string) {
 	if WantsJSON(w, r) {
 		ErrorJSON(w, r, status, message)
@@ -103,47 +105,52 @@ func Error(w http.ResponseWriter, r *http.Request, status int, message string) {
 	http.Error(w, message, status)
 }
 
-// ErrorJSON は、相手が何を求めていても JSON でエラーを返します。
+// ErrorJSON returns an error as JSON whatever the caller asked for.
 //
-// JSON しか返さないルート用です。そういうルートは成功時も無条件に JSON を返すので、
-// エラーだけ Accept で形が変わると、呼び出し側は成功と失敗で本文の読み方を変えることに
-// なります（Accept を送らないブラウザの fetch は、エラー本文も JSON として読みます）。
+// It is for routes that return only JSON. Such routes return JSON unconditionally on
+// success, so if only errors changed shape with Accept, callers would have to read the body
+// one way on success and another on failure (a browser fetch that sends no Accept reads the
+// error body as JSON too).
 //
-// Vary: Accept は立てません。この応答は Accept で変わらないためです。
+// It does not set Vary: Accept, because this response does not vary with Accept.
 func ErrorJSON(w http.ResponseWriter, r *http.Request, status int, message string) {
 	JSON(w, r, status, errorBody{Error: message})
 }
 
-// ServerError は、5xx の応答を「原因はログに、本文は定型文で」の形で返します。
+// ServerError returns a 5xx response in the form "the cause goes to the log, the body is
+// canned text".
 //
-// 内部エラーの文面（接続先のホスト名、GCS のパス、SDK のメッセージ）はそのまま
-// 本文に出すと利用者に見えます。URL 規約 2.6 が「5xx の詳細はログに出し、本文に
-// 出さない」と定めているのはそのためで、これを各ハンドラーが「slog → 定型文」の
-// 2 行で書くと、定型文がサービスごとに割れ（"internal server error" と
-// StatusText と日本語）、err.Error() をそのまま渡す経路も混じります。
+// The text of an internal error (the host it connected to, a storage path, an SDK message)
+// is visible to the user if it goes into the body as is. That is why URL convention 2.6
+// says "log the details of a 5xx and keep them out of the body". When every handler writes
+// that as the two lines "slog, then canned text", the canned text splits per service
+// ("internal server error", StatusText, Japanese) and paths that pass err.Error() straight
+// through creep in.
 //
-// 記録は r のコンテキストで行うので、slogctx で ctx に載せた job_id などが付きます。
-// 本文は Accept に応じて JSON か text/plain です（Error と同じ）。
-// 4xx には使わないでください。4xx の本文は利用者への説明で、隠すものではありません。
+// It logs with r's context, so attributes put on ctx through slogctx (job_id and so on)
+// are included. The body is JSON or text/plain according to Accept (the same as Error).
+// Do not use it for 4xx: a 4xx body is the explanation owed to the user, not something to
+// hide.
 func ServerError(w http.ResponseWriter, r *http.Request, status int, err error, msg string, attrs ...any) {
 	logServerError(r, status, err, msg, attrs)
 	Error(w, r, status, http.StatusText(status))
 }
 
-// ServerErrorJSON は ServerError の、常に JSON で返す版です（ErrorJSON と同じ関係）。
+// ServerErrorJSON is the version of ServerError that always returns JSON (the same
+// relationship as ErrorJSON to Error).
 func ServerErrorJSON(w http.ResponseWriter, r *http.Request, status int, err error, msg string, attrs ...any) {
 	logServerError(r, status, err, msg, attrs)
 	ErrorJSON(w, r, status, http.StatusText(status))
 }
 
-// logServerError は、5xx の原因をリクエストのコンテキストで記録します。
+// logServerError logs the cause of a 5xx with the request's context.
 func logServerError(r *http.Request, status int, err error, msg string, attrs []any) {
 	attrs = append(attrs, "status", status, "error", err)
 	slog.ErrorContext(requestContext(r), msg, attrs...)
 }
 
-// bodyAllowed は、status の応答が本文を持てるかを返します。
-// 規則は net/http が Write を拒む条件（1xx / 204 / 304）と同じです。
+// bodyAllowed reports whether a response with status can carry a body.
+// The rule is the same as the condition under which net/http refuses Write (1xx / 204 / 304).
 func bodyAllowed(status int) bool {
 	if status >= 100 && status <= 199 {
 		return false
@@ -151,8 +158,8 @@ func bodyAllowed(status int) bool {
 	return status != http.StatusNoContent && status != http.StatusNotModified
 }
 
-// requestContext は、r が nil でも使えるコンテキストを返します。
-// このパッケージの他の関数と同じく、ゼロ値・nil で落ちないようにするためです。
+// requestContext returns a context that is usable even when r is nil.
+// Like the other functions in this package, it must not crash on zero values or nil.
 func requestContext(r *http.Request) context.Context {
 	if r == nil {
 		return context.Background()

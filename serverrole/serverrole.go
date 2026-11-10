@@ -1,10 +1,11 @@
-// Package serverrole は、1つのイメージを Web 面と Worker 面の2サービスとして
-// デプロイするときに、そのプロセスがどちらを担うかを表す語彙を提供します。
+// Package serverrole provides the vocabulary for which side a process takes when one image
+// is deployed as two services, a web surface and a worker surface.
 //
-// 語彙と検証だけを持ち、役割ごとに何を提供するかは利用側が決めます。
-// キットは役割で分岐しないため、4つ目の役割や役割ごとの属性が要るアプリは、
-// このパッケージを変更せずに自分の側で足せます（Role は定義済み文字列型なので、
-// 独自の定数を宣言し、Parse を自前の解釈で包めば済みます）。
+// It holds only the vocabulary and its validation; what each role serves is decided by the
+// consumer. The kit never branches on the role, so an app that needs a fourth role or
+// per-role attributes can add them on its own side without changing this package (Role is
+// a defined string type, so declaring your own constant and wrapping Parse with your own
+// interpretation is enough).
 package serverrole
 
 import (
@@ -12,51 +13,51 @@ import (
 	"strings"
 )
 
-// Role は、プロセスが担う役割です。
+// Role is the role a process takes.
 type Role string
 
 const (
-	// Both は Web 面と Worker 面の両方を提供します（ローカル開発用）。
+	// Both serves both the web surface and the worker surface (for local development).
 	Both Role = "both"
-	// Web は Web 面（ブラウザ向け UI とサービス間 API）だけを提供します。
+	// Web serves only the web surface (the browser UI and the service-to-service API).
 	Web Role = "web"
-	// Worker は Worker 面（タスクキューから呼ばれる実行系）だけを提供します。
+	// Worker serves only the worker surface (the execution side called from a task queue).
 	Worker Role = "worker"
 )
 
-// Parse は SERVER_ROLE 等の設定値を役割に変換します。空文字も未知の値もエラーです。
-// 大文字小文字と前後の空白は正規化して受け付けます。
+// Parse converts a setting such as SERVER_ROLE into a role. Both the empty string and
+// unknown values are errors. Case and surrounding whitespace are normalized and accepted.
 //
-// 未設定を Both とみなしません。そう扱うと、本番の環境変数が1つ欠けただけで
-// 公開している Web 面に Worker のルートが復活します。未知の値を黙って受け入れるのも
-// 同じく危険で、今度は何のルートも提供しないサービスがデプロイされます。
-// どちらも起動時に落とすほうが安全です。
+// Unset is not taken as Both. Treating it that way would mean that a single missing
+// environment variable in production brings the worker routes back onto the public web
+// surface. Silently accepting an unknown value is just as dangerous: this time a service
+// that serves no routes at all gets deployed. Failing at startup is safer in both cases.
 func Parse(raw string) (Role, error) {
 	role := Role(strings.ToLower(strings.TrimSpace(raw)))
 	switch role {
 	case Both, Web, Worker:
 		return role, nil
 	default:
-		return "", fmt.Errorf("server role (%q) は %q, %q, %q のいずれかである必要があります",
+		return "", fmt.Errorf("server role (%q) must be one of %q, %q, %q",
 			raw, Web, Worker, Both)
 	}
 }
 
-// ServesWeb は、この役割が Web 面を提供するかを返します。
+// ServesWeb reports whether this role serves the web surface.
 func (r Role) ServesWeb() bool { return r == Both || r == Web }
 
-// ServesWorker は、この役割が Worker 面を提供するかを返します。
+// ServesWorker reports whether this role serves the worker surface.
 func (r Role) ServesWorker() bool { return r == Both || r == Worker }
 
-// UnmarshalText は encoding.TextUnmarshaler を実装します。
+// UnmarshalText implements encoding.TextUnmarshaler.
 //
-// 環境変数や JSON をデコードする時点で Parse を通すためにあります。これが無いと、
-// デコーダは Role が定義済み文字列型であることだけを見て未知の値でも代入でき、
-// アプリが後から Parse を呼び忘れると ServesWeb も ServesWorker も false のまま
-// 起動して、何のルートも提供しないサービスがデプロイされます。
+// It exists so that Parse runs at the moment environment variables or JSON are decoded.
+// Without it, a decoder sees only that Role is a defined string type and assigns even an
+// unknown value; if the app then forgets to call Parse, it starts with both ServesWeb and
+// ServesWorker false, and a service that serves no routes at all gets deployed.
 //
-// 値が与えられなかった場合、多くのデコーダはこのメソッドを呼びません。
-// 未設定を弾くのはタグ側の役目です（例: env:"SERVER_ROLE,required"）。
+// Most decoders do not call this method when no value is given. Rejecting unset is the
+// tag's job (for example env:"SERVER_ROLE,required").
 func (r *Role) UnmarshalText(text []byte) error {
 	role, err := Parse(string(text))
 	if err != nil {
