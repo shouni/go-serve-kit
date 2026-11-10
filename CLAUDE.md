@@ -150,7 +150,7 @@ Each package is imported on its own; nothing here imports anything else here.
 
 - **Comments, doc comments, error / log / panic messages and test assertion messages are English**
   (moved from Japanese on 2026-11-10; do not mix Japanese back in). Go style: error strings are lowercase
-  with no trailing punctuation (ST1005). Japanese stays only where it is data: test fixtures passed
-  through as message bodies, and `t.Run` / table `name` subtest names (not yet translated).
+  with no trailing punctuation (ST1005). `t.Run` / table `name` subtest names are English too (moved
+  2026-11-10). Japanese stays only where it is data: test fixtures passed through as message bodies.
 - **`README.md` is English and `README.ja.md` is its Japanese version.** Update the two together; both
   carry the language switch under the badges.

@@ -12,7 +12,7 @@ import (
 func TestParse(t *testing.T) {
 	t.Parallel()
 
-	t.Run("有効な値", func(t *testing.T) {
+	t.Run("valid values", func(t *testing.T) {
 		t.Parallel()
 		tests := []struct {
 			raw  string
@@ -38,7 +38,7 @@ func TestParse(t *testing.T) {
 		}
 	})
 
-	t.Run("空文字と未知の値はエラー", func(t *testing.T) {
+	t.Run("empty and unknown values fail", func(t *testing.T) {
 		t.Parallel()
 		for _, raw := range []string{"", "   ", "wrker", "all", "true", "batch"} {
 			got, err := Parse(raw)
@@ -49,7 +49,7 @@ func TestParse(t *testing.T) {
 	})
 
 	// Without the configured value in the error message, a typo takes longer to find.
-	t.Run("エラーに入力値と候補が出る", func(t *testing.T) {
+	t.Run("error shows input and choices", func(t *testing.T) {
 		t.Parallel()
 		_, err := Parse("wrker")
 		if err == nil {
@@ -101,10 +101,10 @@ func TestRoleUnmarshalText(t *testing.T) {
 		want    Role
 		wantErr bool
 	}{
-		{name: "既知の値", text: "worker", want: Worker},
-		{name: "大文字と空白は正規化する", text: "  Web  ", want: Web},
-		{name: "空はエラー", text: "", wantErr: true},
-		{name: "未知の値はエラー", text: "api", wantErr: true},
+		{name: "known value", text: "worker", want: Worker},
+		{name: "normalizes case and spaces", text: "  Web  ", want: Web},
+		{name: "empty fails", text: "", wantErr: true},
+		{name: "unknown value fails", text: "api", wantErr: true},
 	}
 
 	for _, tt := range tests {

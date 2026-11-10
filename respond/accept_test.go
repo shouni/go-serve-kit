@@ -14,12 +14,12 @@ func TestWantsJSON(t *testing.T) {
 		accept string
 		want   bool
 	}{
-		{"JSON を明示していれば true", "application/json", true},
-		{"charset 付きでも true", "application/json; charset=utf-8", true},
-		{"大文字でも true", "Application/JSON", true},
-		{"ブラウザの Accept は false", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", false},
-		{"curl の既定 */* は false", "*/*", false},
-		{"Accept なしは false", "", false},
+		{"explicit JSON is true", "application/json", true},
+		{"with charset is true", "application/json; charset=utf-8", true},
+		{"uppercase is true", "Application/JSON", true},
+		{"browser Accept is false", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8", false},
+		{"curl default */* is false", "*/*", false},
+		{"no Accept is false", "", false},
 	}
 
 	for _, tt := range tests {
@@ -56,7 +56,7 @@ func TestWantsJSON_NilArgs(t *testing.T) {
 }
 
 func TestAddVaryAccept(t *testing.T) {
-	t.Run("重複して追加しないこと", func(t *testing.T) {
+	t.Run("does not add duplicates", func(t *testing.T) {
 		h := http.Header{}
 		respond.AddVaryAccept(h)
 		respond.AddVaryAccept(h)
@@ -67,7 +67,7 @@ func TestAddVaryAccept(t *testing.T) {
 	})
 
 	// When Vary is already set for another header, Accept is added.
-	t.Run("既存の Vary を壊さないこと", func(t *testing.T) {
+	t.Run("keeps existing Vary", func(t *testing.T) {
 		h := http.Header{}
 		h.Add("Vary", "Origin")
 		respond.AddVaryAccept(h)
@@ -79,7 +79,7 @@ func TestAddVaryAccept(t *testing.T) {
 	})
 
 	// When already listed in a comma-separated value, it is not added.
-	t.Run("カンマ区切りの既存値も検出すること", func(t *testing.T) {
+	t.Run("detects existing comma-separated value", func(t *testing.T) {
 		h := http.Header{}
 		h.Add("Vary", "Origin, accept")
 		respond.AddVaryAccept(h)
@@ -89,7 +89,7 @@ func TestAddVaryAccept(t *testing.T) {
 		}
 	})
 
-	t.Run("nil でも panic しないこと", func(_ *testing.T) {
+	t.Run("nil does not panic", func(_ *testing.T) {
 		respond.AddVaryAccept(nil)
 	})
 }

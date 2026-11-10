@@ -78,13 +78,13 @@ func TestError(t *testing.T) {
 		wantBody        string
 	}{
 		{
-			name:            "JSON を求めた相手には JSON",
+			name:            "JSON for JSON clients",
 			accept:          "application/json",
 			wantContentType: "application/json; charset=utf-8",
 			wantBody:        `{"error":"not found"}`,
 		},
 		{
-			name:            "ページを求めた相手には text/plain",
+			name:            "text/plain for page clients",
 			accept:          "text/html",
 			wantContentType: "text/plain; charset=utf-8",
 			wantBody:        "not found",
@@ -349,7 +349,7 @@ func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 
 	cause := errors.New("dial tcp 10.0.0.5:443: connection refused")
 
-	t.Run("Error は Accept に応じて形を変える", func(t *testing.T) {
+	t.Run("Error follows Accept", func(t *testing.T) {
 		buf.Reset()
 		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		req.Header.Set("Accept", "application/json")
@@ -373,7 +373,7 @@ func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 		}
 	})
 
-	t.Run("ServerErrorJSON は常に JSON", func(t *testing.T) {
+	t.Run("ServerErrorJSON is always JSON", func(t *testing.T) {
 		buf.Reset()
 		rec := httptest.NewRecorder()
 
@@ -388,7 +388,7 @@ func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 		}
 	})
 
-	t.Run("nil のリクエストでも落ちない", func(t *testing.T) {
+	t.Run("nil request does not panic", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		respond.ServerError(rec, nil, http.StatusInternalServerError, cause, "boom")
 		if rec.Code != http.StatusInternalServerError {

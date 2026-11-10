@@ -66,25 +66,25 @@ func TestMatchesCurrentAppPolicies(t *testing.T) {
 		wantMedi string
 	}{
 		{
-			app:      "adk-review（外部オリジンなし）",
+			app:      "adk-review (no external origin)",
 			cfg:      secureheaders.Config{},
 			wantImg:  "img-src 'self' data:",
 			wantMedi: "media-src 'self'",
 		},
 		{
-			app:      "ap-mv（画像も音声も外部ストレージ）",
+			app:      "ap-mv (external images and audio)",
 			cfg:      secureheaders.Config{ImageSources: []string{gcs}, MediaSources: []string{gcs}},
 			wantImg:  "img-src 'self' data: " + gcs,
 			wantMedi: "media-src 'self' " + gcs,
 		},
 		{
-			app:      "ap-story（画像だけ外部ストレージ）",
+			app:      "ap-story (external images only)",
 			cfg:      secureheaders.Config{ImageSources: []string{gcs}},
 			wantImg:  "img-src 'self' data: " + gcs,
 			wantMedi: "media-src 'self'",
 		},
 		{
-			app:      "ap-voice（音声だけ外部ストレージ）",
+			app:      "ap-voice (external audio only)",
 			cfg:      secureheaders.Config{MediaSources: []string{gcs}},
 			wantImg:  "img-src 'self' data:",
 			wantMedi: "media-src 'self' " + gcs,
@@ -130,9 +130,9 @@ func TestHSTS(t *testing.T) {
 		maxAge time.Duration
 		want   string
 	}{
-		{"未指定は 1 年", 0, "max-age=31536000; includeSubDomains"},
-		{"指定した長さ", 30 * 24 * time.Hour, "max-age=2592000; includeSubDomains"},
-		{"負値なら付けない", -1, ""},
+		{"unset is one year", 0, "max-age=31536000; includeSubDomains"},
+		{"given duration", 30 * 24 * time.Hour, "max-age=2592000; includeSubDomains"},
+		{"negative omits header", -1, ""},
 	}
 
 	for _, tt := range tests {
