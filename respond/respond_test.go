@@ -28,23 +28,23 @@ func TestJSON(t *testing.T) {
 	if got := strings.TrimSpace(rec.Body.String()); got != `{"id":"job-1"}` {
 		t.Errorf("body = %q", got)
 	}
-	// JSON しか返さない経路に Vary は要らない。立てるのは WantsJSON の仕事。
+	// A route that returns only JSON needs no Vary; setting it is WantsJSON's job.
 	if got := rec.Header().Get("Vary"); got != "" {
-		t.Errorf("Vary = %q, want 空（JSON は表現を出し分けない）", got)
+		t.Errorf("Vary = %q, want empty (JSON does not vary its representation)", got)
 	}
 }
 
-// TestJSONLogsEncodeFailure は、ヘッダー送信後に失敗しても記録が残ることを検証します。
-// 状態コードはもう差し替えられないため、記録が唯一の手掛かりになります。
+// TestJSONLogsEncodeFailure verifies that a failure leaves a log record even after the
+// headers are sent. The status can no longer be replaced, so the log is the only clue.
 func TestJSONLogsEncodeFailure(t *testing.T) {
 	var buf bytes.Buffer
 	restore := slog.Default()
 	slog.SetDefault(slog.New(slog.NewJSONHandler(&buf, nil)))
 	t.Cleanup(func() { slog.SetDefault(restore) })
 
-	// chan は JSON にできないため、Encode がヘッダー送信後に失敗します。
-	// リクエストの有無で分けているのは、ログ用のコンテキストを r から取るためです。
-	// ハンドラーの外から呼ばれても記録は残る必要があります。
+	// A chan cannot be JSON, so Encode fails after the headers are sent.
+	// The cases split on whether there is a request because the logging context comes from
+	// r; the record must be kept even when called from outside a handler.
 	for _, req := range []*http.Request{
 		httptest.NewRequest(http.MethodGet, "/", nil),
 		nil,
@@ -55,17 +55,17 @@ func TestJSONLogsEncodeFailure(t *testing.T) {
 		respond.JSON(rec, req, http.StatusOK, make(chan int))
 
 		if rec.Code != http.StatusInternalServerError {
-			t.Errorf("status = %d, want 500（壊れた本文を送らず失敗へ振り替える）", rec.Code)
+			t.Errorf("status = %d, want 500 (turn it into a failure instead of sending a broken body)", rec.Code)
 		}
 		if got := rec.Header().Get("Content-Type"); got != "application/json; charset=utf-8" {
-			t.Errorf("Content-Type = %q（失敗時も JSON のまま返す）", got)
+			t.Errorf("Content-Type = %q (stay JSON on failure too)", got)
 		}
 		var body map[string]string
 		if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-			t.Errorf("失敗時の本文が JSON として読めません: %q", rec.Body.String())
+			t.Errorf("failure body is not valid JSON: %q", rec.Body.String())
 		}
-		if !strings.Contains(buf.String(), "エンコードに失敗") {
-			t.Errorf("エンコード失敗が記録されていません (req=%v): %s", req != nil, buf.String())
+		if !strings.Contains(buf.String(), "failed to encode") {
+			t.Errorf("encode failure not logged (req=%v): %s", req != nil, buf.String())
 		}
 	}
 }
@@ -78,13 +78,13 @@ func TestError(t *testing.T) {
 		wantBody        string
 	}{
 		{
-			name:            "JSON を求めた相手には JSON",
+			name:            "JSON for JSON clients",
 			accept:          "application/json",
 			wantContentType: "application/json; charset=utf-8",
 			wantBody:        `{"error":"not found"}`,
 		},
 		{
-			name:            "ページを求めた相手には text/plain",
+			name:            "text/plain for page clients",
 			accept:          "text/html",
 			wantContentType: "text/plain; charset=utf-8",
 			wantBody:        "not found",
@@ -108,7 +108,7 @@ func TestError(t *testing.T) {
 			if got := strings.TrimSpace(rec.Body.String()); got != tt.wantBody {
 				t.Errorf("body = %q, want %q", got, tt.wantBody)
 			}
-			// 応答が Accept で変わる以上、キャッシュへ伝える必要がある。
+			// The response varies with Accept, so caches must be told.
 			if got := rec.Header().Get("Vary"); got != "Accept" {
 				t.Errorf("Vary = %q, want %q", got, "Accept")
 			}
@@ -116,8 +116,8 @@ func TestError(t *testing.T) {
 	}
 }
 
-// TestErrorBodyShape は、エラー本文の形が {"error": ...} であることを固定します。
-// 4 つのバックエンドを 1 つのクライアントから呼ぶため、形が割れると読み方が変わります。
+// TestErrorBodyShape pins the error body shape to {"error": ...}.
+// One client calls four backends, so a split in shape changes how it has to read them.
 func TestErrorBodyShape(t *testing.T) {
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -127,10 +127,10 @@ func TestErrorBodyShape(t *testing.T) {
 
 	var body map[string]any
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-		t.Fatalf("本文が JSON として読めません: %v (%s)", err, rec.Body.String())
+		t.Fatalf("body is not valid JSON: %v (%s)", err, rec.Body.String())
 	}
 	if len(body) != 1 {
-		t.Errorf("body = %v, want キーは error だけ", body)
+		t.Errorf("body = %v, want error as the only key", body)
 	}
 	if body["error"] != "ストレージから読めませんでした" {
 		t.Errorf("body[error] = %v", body["error"])
@@ -138,17 +138,17 @@ func TestErrorBodyShape(t *testing.T) {
 }
 
 func TestWriteNilArgs(t *testing.T) {
-	// nil の ResponseWriter でも落ちない。
+	// A nil ResponseWriter does not crash.
 	respond.JSON(nil, nil, http.StatusOK, map[string]string{})
 
-	// リクエストが nil でも書き出せる（ログ用のコンテキストだけ既定に倒れる）。
+	// A nil request can still be written (only the logging context falls back to the default).
 	noReq := httptest.NewRecorder()
 	respond.JSON(noReq, nil, http.StatusOK, map[string]string{"ok": "yes"})
 	if got := strings.TrimSpace(noReq.Body.String()); got != `{"ok":"yes"}` {
 		t.Errorf("body = %q", got)
 	}
 
-	// r が nil なら JSON は求められていない扱いになり、text/plain へ倒れる。
+	// A nil r counts as not asking for JSON and falls back to text/plain.
 	rec := httptest.NewRecorder()
 	respond.Error(rec, nil, http.StatusInternalServerError, "boom")
 
@@ -160,10 +160,10 @@ func TestWriteNilArgs(t *testing.T) {
 	}
 }
 
-// TestErrorJSON は、相手が何を求めていても JSON を返すことを検証します。
+// TestErrorJSON verifies that JSON is returned whatever the caller asked for.
 //
-// JSON しか返さないルートでは、成功時が無条件 JSON である以上、エラーも同じ形で
-// なければ呼び出し側が成功と失敗で本文の読み方を変えることになります。
+// On a route that returns only JSON, success is unconditionally JSON, so unless errors take
+// the same shape, callers have to read the body one way on success and another on failure.
 func TestErrorJSON(t *testing.T) {
 	for _, accept := range []string{"application/json", "text/html", "*/*", ""} {
 		t.Run("Accept="+accept, func(t *testing.T) {
@@ -184,22 +184,22 @@ func TestErrorJSON(t *testing.T) {
 
 			var body map[string]any
 			if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
-				t.Fatalf("本文が JSON として読めません: %v (%s)", err, rec.Body.String())
+				t.Fatalf("body is not valid JSON: %v (%s)", err, rec.Body.String())
 			}
 			if body["error"] != "読み出しに失敗しました" {
 				t.Errorf("body[error] = %v", body["error"])
 			}
-			// 応答が Accept で変わらない以上、Vary を立てる理由がありません。
+			// The response does not vary with Accept, so there is no reason to set Vary.
 			if got := rec.Header().Get("Vary"); got != "" {
-				t.Errorf("Vary = %q, want 空", got)
+				t.Errorf("Vary = %q, want empty", got)
 			}
 		})
 	}
 }
 
-// TestErrorAndErrorJSONAgreeForJSONCallers は、JSON を求めた相手には
-// 2 つが同じ応答を返すことを固定します。違いは「求めていない相手に何を返すか」
-// だけである、という関係を崩さないためです。
+// TestErrorAndErrorJSONAgreeForJSONCallers pins that the two return the same response to a
+// caller that asked for JSON, so that their only difference remains "what to return to a
+// caller that did not ask for it".
 func TestErrorAndErrorJSONAgreeForJSONCallers(t *testing.T) {
 	newReq := func() *http.Request {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
@@ -222,22 +222,22 @@ func TestErrorAndErrorJSONAgreeForJSONCallers(t *testing.T) {
 	if got, want := negotiated.Header().Get("Content-Type"), always.Header().Get("Content-Type"); got != want {
 		t.Errorf("Content-Type = %q / %q", got, want)
 	}
-	// Error は判定するので Vary を立て、ErrorJSON は立てません。
+	// Error decides, so it sets Vary; ErrorJSON does not.
 	if negotiated.Header().Get("Vary") != "Accept" {
-		t.Error("Error が Vary: Accept を立てていません")
+		t.Error("Error did not set Vary: Accept")
 	}
 	if always.Header().Get("Vary") != "" {
-		t.Error("ErrorJSON が Vary を立てています")
+		t.Error("ErrorJSON set Vary")
 	}
 }
 
-// TestJSONDoesNotLeakPartialBody は、エンコードが途中で失敗する値を渡しても、
-// 書きかけの本文が送られないことを検証します。バッファへ組み立ててから送る
-// 理由がこれで、直接流すと {"ok":"..." までが 200 で届きます。
+// TestJSONDoesNotLeakPartialBody verifies that a half-written body is not sent even when
+// the value fails midway through encoding. This is why the body is built in a buffer first:
+// streamed directly, everything up to {"ok":"..." would arrive under a 200.
 func TestJSONDoesNotLeakPartialBody(t *testing.T) {
 	payload := struct {
 		OK  string   `json:"ok"`
-		Bad chan int `json:"bad"` // ここでエンコードが失敗する
+		Bad chan int `json:"bad"` // encoding fails here
 	}{OK: "この値は届いてはいけません"}
 
 	var logs bytes.Buffer
@@ -247,15 +247,15 @@ func TestJSONDoesNotLeakPartialBody(t *testing.T) {
 	respond.JSON(rec, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK, payload)
 
 	if strings.Contains(rec.Body.String(), "届いてはいけません") {
-		t.Errorf("書きかけの本文が送られています: %q", rec.Body.String())
+		t.Errorf("a half-written body was sent: %q", rec.Body.String())
 	}
 	if rec.Code != http.StatusInternalServerError {
 		t.Errorf("status = %d, want 500", rec.Code)
 	}
 }
 
-// failingWriter は Write が必ず失敗する ResponseWriter です。
-// 接続が切れた後の書き出しを模します。
+// failingWriter is a ResponseWriter whose Write always fails.
+// It simulates writing after the connection has dropped.
 type failingWriter struct {
 	header http.Header
 	code   int
@@ -271,9 +271,9 @@ func (f *failingWriter) Header() http.Header {
 func (f *failingWriter) Write([]byte) (int, error) { return 0, errors.New("connection reset") }
 func (f *failingWriter) WriteHeader(code int)      { f.code = code }
 
-// TestJSONLogsWriteFailure は、組み立てには成功したが送信に失敗した場合
-// （相手が切断した等）に記録が残ることを検証します。ここで黙って返ると、
-// 応答が届いていない事実がどこにも残りません。
+// TestJSONLogsWriteFailure verifies that a record is left when building succeeded but
+// sending failed (the peer disconnected, for example). Returning silently here would leave
+// no trace anywhere that the response never arrived.
 func TestJSONLogsWriteFailure(t *testing.T) {
 	var logs bytes.Buffer
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
@@ -282,25 +282,27 @@ func TestJSONLogsWriteFailure(t *testing.T) {
 	respond.JSON(w, httptest.NewRequest(http.MethodGet, "/", nil), http.StatusOK, map[string]string{"ok": "yes"})
 
 	if w.code != http.StatusOK {
-		t.Errorf("status = %d, want 200（組み立ては成功している）", w.code)
+		t.Errorf("status = %d, want 200 (building succeeded)", w.code)
 	}
-	if !strings.Contains(logs.String(), "書き出しに失敗") {
-		t.Errorf("書き出し失敗が記録されていません: %s", logs.String())
+	if !strings.Contains(logs.String(), "failed to write") {
+		t.Errorf("write failure not logged: %s", logs.String())
 	}
 }
 
-// TestJSONSkipsBodyForBodilessStatus は、本文を持てない状態コードで本文を書かず、
-// 失敗も記録しないことを検証します。net/http は 204 への Write を拒むので、書こうと
-// すると応答は正しいのに毎回 ERROR が残り、本当の書き出し失敗が埋もれます。
+// TestJSONSkipsBodyForBodilessStatus verifies that no body is written, and no failure is
+// logged, for statuses that cannot carry a body. net/http refuses Write on a 204, so trying
+// would leave an ERROR every time although the response is correct, burying the real write
+// failures.
 func TestJSONSkipsBodyForBodilessStatus(t *testing.T) {
 	var logs bytes.Buffer
 	restore := slog.Default()
 	slog.SetDefault(slog.New(slog.NewTextHandler(&logs, nil)))
 	t.Cleanup(func() { slog.SetDefault(restore) })
 
-	// 実サーバーで確かめる。httptest.ResponseRecorder は 204 への Write を拒まないため、
-	// レコーダーだけでは net/http の挙動を再現できない。
-	// 1xx は net/http が中間応答として扱い最終応答にならないので、下のレコーダーで見る。
+	// Check against a real server: httptest.ResponseRecorder does not refuse Write on a 204,
+	// so a recorder alone cannot reproduce net/http's behavior.
+	// net/http treats 1xx as interim responses, never final ones, so those are checked with
+	// the recorder below.
 	for _, status := range []int{http.StatusNoContent, http.StatusNotModified} {
 		logs.Reset()
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -319,14 +321,14 @@ func TestJSONSkipsBodyForBodilessStatus(t *testing.T) {
 			t.Errorf("status = %d, want %d", resp.StatusCode, status)
 		}
 		if got := resp.Header.Get("Content-Type"); got != "" {
-			t.Errorf("%d: Content-Type = %q, want none（本文が無い）", status, got)
+			t.Errorf("%d: Content-Type = %q, want none (there is no body)", status, got)
 		}
 		if logs.Len() != 0 {
 			t.Errorf("%d: unexpected log: %s", status, logs.String())
 		}
 	}
 
-	// レコーダー上でも本文が空であることを直接確かめる（1xx はここでしか見られない）。
+	// Also check directly on a recorder that the body is empty (1xx can only be seen here).
 	for _, status := range []int{http.StatusContinue, http.StatusNoContent, http.StatusNotModified} {
 		rec := httptest.NewRecorder()
 		respond.JSON(rec, nil, status, map[string]string{"ignored": "yes"})
@@ -336,8 +338,9 @@ func TestJSONSkipsBodyForBodilessStatus(t *testing.T) {
 	}
 }
 
-// TestServerErrorHidesCauseAndLogsIt は、5xx の原因が本文ではなくログに出ることを
-// 検証します。内部エラーの文面には接続先やパスが含まれ、本文に出すと利用者に見えます。
+// TestServerErrorHidesCauseAndLogsIt verifies that the cause of a 5xx goes to the log, not
+// the body. Internal error text contains connection targets and paths, which the user would
+// see if they went into the body.
 func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 	var buf bytes.Buffer
 	restore := slog.Default()
@@ -346,7 +349,7 @@ func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 
 	cause := errors.New("dial tcp 10.0.0.5:443: connection refused")
 
-	t.Run("Error は Accept に応じて形を変える", func(t *testing.T) {
+	t.Run("Error follows Accept", func(t *testing.T) {
 		buf.Reset()
 		req := httptest.NewRequest(http.MethodGet, "/jobs", nil)
 		req.Header.Set("Accept", "application/json")
@@ -370,7 +373,7 @@ func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 		}
 	})
 
-	t.Run("ServerErrorJSON は常に JSON", func(t *testing.T) {
+	t.Run("ServerErrorJSON is always JSON", func(t *testing.T) {
 		buf.Reset()
 		rec := httptest.NewRecorder()
 
@@ -385,7 +388,7 @@ func TestServerErrorHidesCauseAndLogsIt(t *testing.T) {
 		}
 	})
 
-	t.Run("nil のリクエストでも落ちない", func(t *testing.T) {
+	t.Run("nil request does not panic", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		respond.ServerError(rec, nil, http.StatusInternalServerError, cause, "boom")
 		if rec.Code != http.StatusInternalServerError {

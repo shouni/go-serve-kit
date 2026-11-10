@@ -9,7 +9,7 @@ import (
 	"github.com/shouni/go-serve-kit/staticfiles"
 )
 
-// 実際には //go:embed した embed.FS を FS に渡します。ここでは代わりに fstest.MapFS を使います。
+// In practice FS is an embed.FS from //go:embed; fstest.MapFS stands in for it here.
 func ExampleNew() {
 	assets := fstest.MapFS{
 		"static/css/app.css":                          {Data: []byte("body{}")},
@@ -18,7 +18,7 @@ func ExampleNew() {
 
 	files, err := staticfiles.New(staticfiles.Config{FS: assets, Dir: "static"})
 	if err != nil {
-		fmt.Println(err) // Dir の取り違えはここで止まります
+		fmt.Println(err) // a wrong Dir stops here
 		return
 	}
 	mux := http.NewServeMux()

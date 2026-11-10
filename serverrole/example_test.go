@@ -7,7 +7,7 @@ import (
 	"github.com/shouni/go-serve-kit/serverrole"
 )
 
-// 役割は明示が必須です。未設定も未知の値も起動時に止めます。
+// The role must be stated explicitly. Unset and unknown values both stop at startup.
 func ExampleParse() {
 	for _, raw := range []string{" Web ", "worker", "", "api"} {
 		role, err := serverrole.Parse(raw)
@@ -24,7 +24,7 @@ func ExampleParse() {
 	// "api" -> error
 }
 
-// 設定構造体へ直接バインドすると、デコードの時点で Parse が通ります。
+// Binding directly into a config struct runs Parse at decode time.
 func ExampleRole_UnmarshalText() {
 	type config struct {
 		Role serverrole.Role `json:"role"`

@@ -8,58 +8,60 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Go Reference](https://pkg.go.dev/badge/github.com/shouni/go-serve-kit.svg)](https://pkg.go.dev/github.com/shouni/go-serve-kit)
 
-## 🚀 概要 (About) - 何を返すかだけを持ち、サーバーそのものは持たない
+English | [日本語](README.ja.md)
 
-**Go Serve Kit** は、HTTP サービスが応答を返す側で毎回書く定型（防御的ヘッダー・表現の出し分け・役割の宣言・静的ファイルの配信）を引き受けるツールキットです。
-`http.Server` もルーターも `main` も持たず、どの役割が何を提供するかも利用側のルーターが決めます。
+## 🚀 About - owns what to respond with, not the server itself
 
----
-
-## ✨ 提供機能 (Features)
-
-パッケージは独立しており、必要なものだけを import できます。ここに挙げるのは
-**採否を左右する前提**だけです。API の詳細と個々の判断理由は各パッケージの godoc にあります。
-
-* **`respond`**: 応答の書き出し（`JSON` / `Error` / `ErrorJSON`、5xx 用の `ServerError` / `ServerErrorJSON`）と、`Accept` による表現の選択（`WantsJSON`）
-  * **判定は `application/json` の部分一致で、q 値は解釈しません。** `*/*`（curl や多くの HTTP
-    クライアントの既定）は HTML 側に倒れます。JSON を期待する呼び出し元には、明示的な `Accept` を送らせてください。
-  * `WantsJSON` は判定と同時に `Vary: Accept` を立てるので、`ResponseWriter` を要求します。
-    共有キャッシュや CDN を前に置いたとき、宣言を忘れると JSON を求めたクライアントへ HTML が返るためです。
-* **`secureheaders`**: CSP・HSTS・`nosniff`・`Referrer-Policy`・`Permissions-Policy` を全応答へ付与
-  * **既定は「外部オリジンを 1 つも許可せず、インラインスタイルも許さない」** で、第三者製の JS/CSS を
-    CDN からではなく自前配信している前提です。CDN を `script-src` に載せない理由は、jsDelivr のような
-    ホストが npm の全パッケージを配信しており、任意の npm パッケージの読み込みを許可するに等しくなるためです。
-  * 開けられるのは `Config` の `*Sources` と `AllowInlineStyle` だけで、**インラインスクリプトを許す手段はありません。**
-    `*Sources` にキーワードや `*` を渡すと起動時に落ちます。
-* **`staticfiles`**: 埋め込んだ CSS / JS の配信と、パスで決まる `Cache-Control` と `ETag`
-  * **自前のファイルは 5 分、`vendor/` 配下は 1 年の `immutable`** です。第三者製の配布物は、
-    パスにバージョンが入る形（`vendor/bootstrap-5.3.8/`）で `vendor/` の下に置いてください。
-* **`serverrole`**: `web` / `worker` / `both` の語彙と `Parse`
-  * **未設定と未知の値はエラーです。** 未設定を `both` に倒すと、環境変数が 1 つ欠けただけで
-    公開している Web 面に Worker のルートが復活します。
+**Go Serve Kit** takes over the boilerplate an HTTP service writes on the responding side every time: defensive headers, picking a representation, declaring the process's role, and serving static files.
+It has no `http.Server`, no router and no `main`, and which role serves what is decided by the consuming router.
 
 ---
 
-## 🚦 使い方 (Usage)
+## ✨ Features
 
-1 つの `main` で 4 パッケージを組み合わせた例です。分岐（`Error` と `ErrorJSON` の使い分け、
-設定構造体への直接バインド、ETag の無効化など）は
-[pkg.go.dev の Example](https://pkg.go.dev/github.com/shouni/go-serve-kit#section-directories) を参照してください。
+The packages are independent; import only the ones you need. Listed here are only
+**the premises that decide whether the kit fits**. API details and the reasoning behind each decision are in each package's godoc.
+
+* **`respond`**: writing the response (`JSON` / `Error` / `ErrorJSON`, plus `ServerError` / `ServerErrorJSON` for 5xx) and choosing the representation from `Accept` (`WantsJSON`)
+  * **The check is a substring match on `application/json`; q-values are not parsed.** `*/*` (the default of curl and many HTTP
+    clients) falls to the HTML side. Have callers that expect JSON send an explicit `Accept`.
+  * `WantsJSON` sets `Vary: Accept` as it decides, so it requires the `ResponseWriter`.
+    With a shared cache or CDN in front, forgetting that declaration can hand HTML to a client that asked for JSON.
+* **`secureheaders`**: adds CSP, HSTS, `nosniff`, `Referrer-Policy` and `Permissions-Policy` to every response
+  * **The default allows no external origin and no inline style**, on the premise that third-party JS/CSS is
+    self-hosted rather than pulled from a CDN. A CDN stays out of `script-src` because hosts like jsDelivr
+    serve every npm package, so allowing one amounts to allowing any npm package to load.
+  * Only `Config`'s `*Sources` and `AllowInlineStyle` can open things up; **there is no way to allow inline script.**
+    Passing a keyword or `*` to `*Sources` fails at startup.
+* **`staticfiles`**: serves embedded CSS / JS with a `Cache-Control` decided by path, and an `ETag`
+  * **Your own files get 5 minutes, files under `vendor/` get a year of `immutable`.** Put third-party distributions
+    under `vendor/` with the version in the path (`vendor/bootstrap-5.3.8/`).
+* **`serverrole`**: the `web` / `worker` / `both` vocabulary and `Parse`
+  * **Unset and unknown values are errors.** Folding unset into `both` would mean that one missing environment variable
+    brings the worker routes back onto the public web surface.
+
+---
+
+## 🚦 Usage
+
+An example that combines all four packages in one `main`. For the branch cases (`Error` vs `ErrorJSON`,
+binding directly into a config struct, disabling the ETag, and so on) see
+[the Examples on pkg.go.dev](https://pkg.go.dev/github.com/shouni/go-serve-kit#section-directories).
 
 ```go
 func run() error {
     role, err := serverrole.Parse(os.Getenv("SERVER_ROLE"))
     if err != nil {
-        return err // 未設定・未知の値はここで止めます
+        return err // unset and unknown values stop here
     }
 
     files, err := staticfiles.New(staticfiles.Config{FS: assets.StaticFiles, Dir: "static"})
     if err != nil {
-        return err // Dir の取り違えはここで止まります
+        return err // a wrong Dir stops here
     }
 
     mux := http.NewServeMux()
-    mux.Handle("/static/", files) // 認証の外側に置きます
+    mux.Handle("/static/", files) // keep it outside authentication
     if role.ServesWeb() {
         mux.HandleFunc("GET /comics", listComics)
     }
@@ -68,22 +70,22 @@ func run() error {
     }
 
     handler := secureheaders.Middleware(secureheaders.Config{
-        MediaSources:     []string{"https://storage.example.com"}, // 署名付き URL へ 302 する場合
-        AllowInlineStyle: true,                                    // Bootstrap の collapse / tab を使う場合
+        MediaSources:     []string{"https://storage.example.com"}, // when redirecting (302) to signed URLs
+        AllowInlineStyle: true,                                    // when using Bootstrap's collapse / tab
     })(mux)
 
     srv := &http.Server{Addr: ":" + os.Getenv("PORT"), Handler: handler, ReadHeaderTimeout: 5 * time.Second}
     return srv.ListenAndServe()
 }
 
-// 画面と API が同じ URL を共有するルートです。ルートは 1 本に保ち、表現だけを Accept で選びます。
+// A route whose URL is shared by a screen and an API. Keep one route and choose only the representation by Accept.
 func listComics(w http.ResponseWriter, r *http.Request) {
     comics, err := store.List(r.Context())
     if err != nil {
-        respond.Error(w, r, http.StatusInternalServerError, "一覧を取得できませんでした")
+        respond.Error(w, r, http.StatusInternalServerError, "could not load the list")
         return
     }
-    if respond.WantsJSON(w, r) { // Vary: Accept もここで立ちます
+    if respond.WantsJSON(w, r) { // Vary: Accept is set here too
         respond.JSON(w, r, http.StatusOK, comics)
         return
     }
@@ -93,24 +95,24 @@ func listComics(w http.ResponseWriter, r *http.Request) {
 
 ---
 
-## 📦 パッケージ構成 (Package Structure)
+## 📦 Package Structure
 
 ```text
 go-serve-kit/
-├── respond/        # 応答の書き出し（JSON / Error）と、Accept による表現の選択・Vary: Accept
-├── secureheaders/  # ブラウザ向けの防御的レスポンスヘッダーと CSP の組み立て
-├── serverrole/     # web / worker / both の語彙と Parse
-└── staticfiles/    # 埋め込んだ静的ファイルの配信と、パスで決まる Cache-Control
+├── respond/        # writing responses (JSON / Error), choosing the representation by Accept, Vary: Accept
+├── secureheaders/  # defensive browser response headers and CSP assembly
+├── serverrole/     # the web / worker / both vocabulary and Parse
+└── staticfiles/    # serving embedded static files with a Cache-Control decided by path
 ```
 
 ---
 
-## 🤝 依存関係 (Dependencies)
+## 🤝 Dependencies
 
-**ありません。** `go.mod` の `require` は空で、4 パッケージともテストを含めて標準ライブラリだけで動きます。
+**None.** `go.mod` has no `require`; all four packages, tests included, run on the standard library alone.
 
 ---
 
-## 📜 ライセンス (License)
+## 📜 License
 
-このプロジェクトは [MIT License](https://opensource.org/licenses/MIT) の下で公開されています。
+This project is released under the [MIT License](https://opensource.org/licenses/MIT).

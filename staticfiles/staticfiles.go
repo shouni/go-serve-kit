@@ -1,15 +1,15 @@
-// Package staticfiles は、埋め込んだ静的ファイルを配信し、パスに応じた Cache-Control を付けます。
+// Package staticfiles serves embedded static files with a Cache-Control decided by path.
 //
-// 対象は //go:embed した自前の CSS / JS と、Dir 配下の vendor/ に置いた第三者製の配布物です。
-// 前者は URL を変えずに中身が変わるので短命に、後者はパスにバージョンが入るので不変として
-// 扱います。
+// It covers your own CSS / JS embedded with //go:embed, and third-party distributions placed
+// under vendor/ in Dir. The former change content without changing URL, so they are
+// short-lived; the latter carry the version in the path, so they are treated as immutable.
 //
-// ETag は New の時点で中身から計算して付けます。//go:embed した FileServer は Last-Modified を
-// 出せない（ModTime がゼロ値のため net/http が省く）ので、これが無いと期限が切れるたびに
-// 全体を取り直します。
+// An ETag is computed from the contents at New and attached. A FileServer over //go:embed
+// cannot emit Last-Modified (net/http omits it because ModTime is the zero value), so
+// without the ETag every expiry would refetch the whole file.
 //
 //	files, err := staticfiles.New(staticfiles.Config{FS: assets.StaticFiles, Dir: "static"})
-//	mux.Handle("/static/", files) // chi なら r.Handle("/static/*", files)
+//	mux.Handle("/static/", files) // with chi: r.Handle("/static/*", files)
 package staticfiles
 
 import (
@@ -24,63 +24,70 @@ import (
 )
 
 const (
-	// DefaultPrefix は配信するパスの先頭です。
+	// DefaultPrefix is the leading part of the served path.
 	DefaultPrefix = "/static/"
 
-	// DefaultVendorDir は、Dir 配下で「不変」として扱うディレクトリです。ここより下は
-	// パスにバージョンが入った第三者製の配布物（vendor/bootstrap-5.3.8 など）を置く前提で、
-	// 更新すれば必ず別の URL になるので、再検証の往復ごと省きます。
+	// DefaultVendorDir is the directory under Dir treated as immutable. It is meant for
+	// third-party distributions with the version in the path (vendor/bootstrap-5.3.8 and the
+	// like); an update always means a different URL, so even the revalidation round trip is
+	// skipped.
 	DefaultVendorDir = "vendor/"
 
-	// DefaultOwnCacheControl は自前の CSS / JS 用です。URL を変えずに中身が変わるため短命にし、
-	// 期限が切れたら ETag で再検証させます。
+	// DefaultOwnCacheControl is for your own CSS / JS. Their content changes without the URL
+	// changing, so they are short-lived and revalidated with the ETag once expired.
 	DefaultOwnCacheControl = "public, max-age=300, must-revalidate"
 
-	// DefaultVendorCacheControl は DefaultVendorDir 配下用です。
+	// DefaultVendorCacheControl is for files under DefaultVendorDir.
 	DefaultVendorCacheControl = "public, max-age=31536000, immutable"
 )
 
-// Config は配信の設定です。FS 以外は任意で、ゼロ値は既定へ倒れます。
+// Config configures serving. Every field except FS is optional, and zero values fall back
+// to the defaults.
 type Config struct {
-	// FS は配信するファイル群です（必須）。//go:embed した embed.FS をそのまま渡せます。
+	// FS holds the files to serve (required). An embed.FS from //go:embed can be passed as is.
 	FS fs.FS
 
-	// Dir は FS の中で配信の根にするディレクトリです（例: "static"）。空なら FS の根です。
+	// Dir is the directory in FS used as the serving root (for example "static"). If empty,
+	// the root of FS is used.
 	Dir string
 
-	// Prefix は配信するパスの先頭で、"/" で始まり "/" で終わる必要があります。
-	// 既定は DefaultPrefix です。
+	// Prefix is the leading part of the served path and must start and end with "/".
+	// The default is DefaultPrefix.
 	Prefix string
 
-	// VendorDir は Dir 配下で不変として扱うディレクトリです（末尾 "/"）。既定は DefaultVendorDir です。
+	// VendorDir is the directory under Dir treated as immutable (with a trailing "/").
+	// The default is DefaultVendorDir.
 	VendorDir string
 
-	// OwnCacheControl / VendorCacheControl は、それぞれの Cache-Control を差し替えます。
+	// OwnCacheControl / VendorCacheControl replace the respective Cache-Control values.
 	OwnCacheControl    string
 	VendorCacheControl string
 
-	// DisableETag は ETag の計算と付与を止めます。ETag は New の時点で計算して以後変わらないので、
-	// FS が起動後に変わる場合（os.DirFS で開発中など）は古い ETag に 304 を返さないよう true にします。
+	// DisableETag turns off computing and attaching the ETag. The ETag is computed at New and
+	// never changes afterwards, so set it to true when the FS changes after startup (os.DirFS
+	// during development, for example) to avoid answering a stale ETag with a 304.
 	DisableETag bool
 }
 
-// New は静的ファイルを配信する http.Handler を返します。
+// New returns an http.Handler that serves the static files.
 //
-// GET と HEAD だけを受けます。ディレクトリと index.html は一覧や 301 を出さず 404 にします
-// （http.FileServer は index.html をディレクトリへの 301 に変えます）。無いファイルも 404 で、
-// Cache-Control は付けません（1 年の immutable を 404 に付けると、後から置いたファイルが
-// その期間ブラウザに届きません）。".." は http.FileServer と同じ正規化で根の内側に畳まれます。
+// It accepts GET and HEAD only. Directories and index.html get a 404 rather than a listing or
+// a 301 (http.FileServer turns index.html into a 301 to the directory). Missing files are 404
+// too, with no Cache-Control (a year of immutable on a 404 would keep a file added later from
+// reaching browsers for that whole period). ".." is folded inside the root by the same
+// normalization as http.FileServer.
 //
-// ETag は DisableETag でない限り、ここで Dir 配下の全ファイルを読んで計算します。
-// 起動時に 1 度だけ走る処理で、埋め込んだ静的ファイルの量なら無視できる時間です。
+// Unless DisableETag is set, it reads every file under Dir here to compute the ETags. This
+// runs once at startup and takes negligible time for the amount of embedded static files.
 func New(cfg Config) (http.Handler, error) {
 	if cfg.FS == nil {
 		return nil, errors.New("staticfiles: Config.FS must not be nil")
 	}
 	root := cfg.FS
 	if cfg.Dir != "" {
-		// fs.Sub は遅延評価で、無いディレクトリでもエラーを返しません。ここで Stat して
-		// おかないと、埋め込み先の名前を変えただけの取り違えが起動時ではなく全 404 で現れます。
+		// fs.Sub is lazy and returns no error even for a missing directory. Without this Stat,
+		// a mix-up as simple as renaming the embed target would surface as 404s everywhere
+		// instead of a startup failure.
 		info, err := fs.Stat(cfg.FS, cfg.Dir)
 		if err != nil {
 			return nil, fmt.Errorf("staticfiles: Config.Dir %q: %w", cfg.Dir, err)
@@ -129,8 +136,8 @@ func New(cfg Config) (http.Handler, error) {
 			http.NotFound(w, r)
 			return
 		}
-		// FileServer と同じ正規化を先に掛けて、実在するファイルかを見ます。ディレクトリは
-		// 一覧を出さず、無いものには Cache-Control を付けません。
+		// Apply the same normalization as FileServer first and check that the file exists.
+		// Directories are not listed, and missing files get no Cache-Control.
 		name := strings.TrimPrefix(path.Clean("/"+rel), "/")
 		if name == "" || !fs.ValidPath(name) || path.Base(name) == indexPage {
 			http.NotFound(w, r)
@@ -147,8 +154,8 @@ func New(cfg Config) (http.Handler, error) {
 		} else {
 			w.Header().Set("Cache-Control", own)
 		}
-		// FileServer は呼び出し側が先に置いた ETag を If-None-Match の照合に使い、
-		// 一致すれば 304 を返します。
+		// FileServer matches If-None-Match against an ETag the caller has already set and
+		// returns 304 when they match.
 		if tag, ok := etags[name]; ok {
 			w.Header().Set("ETag", tag)
 		}
@@ -156,11 +163,12 @@ func New(cfg Config) (http.Handler, error) {
 	}), nil
 }
 
-// indexPage は http.FileServer がディレクトリへの 301 に変えるファイル名です。
+// indexPage is the file name http.FileServer turns into a 301 to the directory.
 const indexPage = "index.html"
 
-// computeETags は root 配下の全ファイルについて、中身の SHA-256 の先頭 128 ビットから
-// 強い ETag を作ります。衝突を気にしない長さで、ヘッダーに載せる文字数は抑えられます。
+// computeETags makes a strong ETag for every file under root from the first 128 bits of the
+// SHA-256 of its contents. That is long enough not to worry about collisions while keeping
+// the header short.
 func computeETags(root fs.FS) (map[string]string, error) {
 	etags := make(map[string]string)
 	err := fs.WalkDir(root, ".", func(name string, d fs.DirEntry, err error) error {

@@ -7,12 +7,12 @@ import (
 	"testing"
 )
 
-// 空文字と未知の値を拒否することが、このパッケージの存在意義です。
-// 未設定を Both に落とすと、公開している Web 面に Worker のルートが復活します。
+// Rejecting the empty string and unknown values is why this package exists.
+// Folding unset into Both brings the worker routes back onto the public web surface.
 func TestParse(t *testing.T) {
 	t.Parallel()
 
-	t.Run("有効な値", func(t *testing.T) {
+	t.Run("valid values", func(t *testing.T) {
 		t.Parallel()
 		tests := []struct {
 			raw  string
@@ -21,7 +21,7 @@ func TestParse(t *testing.T) {
 			{"both", Both},
 			{"web", Web},
 			{"worker", Worker},
-			// 大文字小文字と前後の空白は正規化する。
+			// Case and surrounding whitespace are normalized.
 			{" WEB ", Web},
 			{"Worker", Worker},
 		}
@@ -38,7 +38,7 @@ func TestParse(t *testing.T) {
 		}
 	})
 
-	t.Run("空文字と未知の値はエラー", func(t *testing.T) {
+	t.Run("empty and unknown values fail", func(t *testing.T) {
 		t.Parallel()
 		for _, raw := range []string{"", "   ", "wrker", "all", "true", "batch"} {
 			got, err := Parse(raw)
@@ -48,8 +48,8 @@ func TestParse(t *testing.T) {
 		}
 	})
 
-	// 設定した値がエラーメッセージに出ないと、打ち間違いの発見に時間がかかります。
-	t.Run("エラーに入力値と候補が出る", func(t *testing.T) {
+	// Without the configured value in the error message, a typo takes longer to find.
+	t.Run("error shows input and choices", func(t *testing.T) {
 		t.Parallel()
 		_, err := Parse("wrker")
 		if err == nil {
@@ -74,7 +74,7 @@ func TestRoleServes(t *testing.T) {
 		{Both, true, true},
 		{Web, true, false},
 		{Worker, false, true},
-		// 利用側が足した独自の役割は、キットが知る2面のどちらも提供しません。
+		// A custom role added by the consumer serves neither of the two surfaces the kit knows.
 		{Role("batch"), false, false},
 	}
 	for _, tt := range tests {
@@ -90,11 +90,10 @@ func TestRoleServes(t *testing.T) {
 	}
 }
 
-// TestRoleUnmarshalText は、デコードの時点で Parse の厳しさが効くことを検証します。
+// TestRoleUnmarshalText verifies that Parse's strictness applies at decode time.
 //
-// 各アプリは env タグで Role を直接受けているため、ここで弾けないと
-// 未知の値がそのまま Role に入り、起動はするがどのルートも提供しない
-// サービスができあがります。
+// Apps receive Role directly through an env tag, so if it is not rejected here an unknown
+// value goes straight into Role, producing a service that starts but serves no routes.
 func TestRoleUnmarshalText(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -102,10 +101,10 @@ func TestRoleUnmarshalText(t *testing.T) {
 		want    Role
 		wantErr bool
 	}{
-		{name: "既知の値", text: "worker", want: Worker},
-		{name: "大文字と空白は正規化する", text: "  Web  ", want: Web},
-		{name: "空はエラー", text: "", wantErr: true},
-		{name: "未知の値はエラー", text: "api", wantErr: true},
+		{name: "known value", text: "worker", want: Worker},
+		{name: "normalizes case and spaces", text: "  Web  ", want: Web},
+		{name: "empty fails", text: "", wantErr: true},
+		{name: "unknown value fails", text: "api", wantErr: true},
 	}
 
 	for _, tt := range tests {
@@ -115,11 +114,11 @@ func TestRoleUnmarshalText(t *testing.T) {
 
 			if tt.wantErr {
 				if err == nil {
-					t.Fatalf("UnmarshalText(%q) = nil, want エラー", tt.text)
+					t.Fatalf("UnmarshalText(%q) = nil, want error", tt.text)
 				}
-				// 失敗しても値を書き換えない（呼び出し側がゼロ値のまま扱える）。
+				// A failure leaves the value untouched (the caller can keep treating it as the zero value).
 				if role != "" {
-					t.Errorf("エラー時に role = %q が入っています", role)
+					t.Errorf("role = %q was set on error", role)
 				}
 				return
 			}
@@ -133,9 +132,9 @@ func TestRoleUnmarshalText(t *testing.T) {
 	}
 }
 
-// TestRoleImplementsTextUnmarshaler は、デコーダが実際にこの経路を通ることを固定します。
-// encoding/json は encoding.TextUnmarshaler を見て呼び分けるため、
-// caarlos0/env（各アプリが使っている）も同じ判定で通ります。
+// TestRoleImplementsTextUnmarshaler pins that decoders actually take this path.
+// encoding/json dispatches on encoding.TextUnmarshaler, and caarlos0/env (which the apps
+// use) goes through the same check.
 func TestRoleImplementsTextUnmarshaler(t *testing.T) {
 	var _ encoding.TextUnmarshaler = (*Role)(nil)
 
@@ -150,6 +149,6 @@ func TestRoleImplementsTextUnmarshaler(t *testing.T) {
 	}
 
 	if err := json.Unmarshal([]byte(`{"role":"api"}`), &cfg); err == nil {
-		t.Error("未知の値がデコードで通ってしまいました")
+		t.Error("unknown value passed decoding")
 	}
 }
